@@ -204,7 +204,13 @@
       url: payload.url || payload.list,
       name: payload.name || 'Fenix TV',
       listType: payload.listType || 'm3u',
-      updatedAt: Date.now()
+      updatedAt: Date.now(),
+      // Xtream credentials (para que la app pueda reconectar)
+      ...(payload.listType === 'xtream' ? {
+        xtreamServer: payload.xtreamServer || '',
+        xtreamUser: payload.xtreamUser || '',
+        xtreamPass: payload.xtreamPass || ''
+      } : {})
     };
     await set(ref(db, `mac_index/${idxKey}`), idxPayload);
 
