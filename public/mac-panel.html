@@ -189,58 +189,75 @@ window.selectType=function(t){
 };
 
 // Check M3U expiry from URL
-window.detectExpiry=async function(){
-  const url=$i('fUrl').value.trim();
-  if(!url){return;}
-  $i('expiryInfo').textContent='Verificando expiración...';
-  $i('expiryInfo').style.color='#888';
+async function fetchXtreamInfo(server, user, pass) {
+  // Try multiple methods to bypass CORS
+  const apiUrl = `${server}/player_api.php?username=${user}&password=${pass}`;
+  // Method 1: direct fetch with no-cors (won't give body but worth trying)
   try {
-    // Try to get Xtream user_info from the URL
-    // If it's a get.php URL, parse credentials and call user_info
-    const urlObj=new URL(url);
-    const username=urlObj.searchParams.get('username');
-    const password=urlObj.searchParams.get('password');
-    const base=urlObj.origin;
-    if(username&&password){
-      const infoUrl=`${base}/player_api.php?username=${username}&password=${password}`;
-      const resp=await fetch(infoUrl);
-      const data=await resp.json();
-      if(data&&data.user_info&&data.user_info.exp_date){
-        const exp=new Date(parseInt(data.user_info.exp_date)*1000);
-        const days=Math.floor((exp-Date.now())/86400000);
-        $i('fExpiry').value=exp.toISOString().split('T')[0];
-        $i('expiryInfo').textContent=`✅ Expira: ${exp.toLocaleDateString('es')} (${days} días)`;
-        $i('expiryInfo').style.color=days<7?'#ff3355':days<30?'#ffaa00':'#00e87a';
-        return;
-      }
+    const resp = await fetch(apiUrl, {
+      method: 'GET',
+      headers: { 'Accept': 'application/json' }
+    });
+    if (resp.ok) {
+      const data = await resp.json();
+      if (data && data.user_info) return data.user_info;
     }
-    $i('expiryInfo').textContent='No se pudo detectar expiración automáticamente';
-    $i('expiryInfo').style.color='#888';
-  } catch(e){
-    $i('expiryInfo').textContent='Ingresa la fecha manualmente';
-    $i('expiryInfo').style.color='#888';
+  } catch(e) {}
+  // Method 2: via Railway proxy if available
+  try {
+    const proxyUrl = 'https://streamflix-production-9559.up.railway.app/proxy?url=' + encodeURIComponent(apiUrl);
+    const resp2 = await fetch(proxyUrl);
+    if (resp2.ok) {
+      const data2 = await resp2.json();
+      if (data2 && data2.user_info) return data2.user_info;
+    }
+  } catch(e) {}
+  return null;
+}
+
+function showExpiry(info, displayEl, inputEl) {
+  if (!info) { displayEl.textContent = 'No se pudo detectar — ingresa la fecha manualmente'; displayEl.style.color='#888'; return; }
+  if (info.exp_date) {
+    const exp = new Date(parseInt(info.exp_date) * 1000);
+    const days = Math.floor((exp - Date.now()) / 86400000);
+    if (inputEl) inputEl.value = exp.toISOString().split('T')[0];
+    displayEl.textContent = `✅ Expira: ${exp.toLocaleDateString('es')} (${days < 0 ? 'EXPIRADA' : days + ' días'})`;
+    displayEl.style.color = days < 0 ? '#ff3355' : days < 7 ? '#ff3355' : days < 30 ? '#ffaa00' : '#00e87a';
+  } else if (info.status === 'Expired') {
+    displayEl.textContent = '❌ Cuenta EXPIRADA'; displayEl.style.color = '#ff3355';
+  } else {
+    displayEl.textContent = `Estado: ${info.status||'?'} | Conexiones: ${info.max_connections||'?'}`;
+    displayEl.style.color = '#888';
   }
+}
+
+window.detectExpiry = async function() {
+  const url = $i('fUrl').value.trim();
+  if (!url) return;
+  const el = $i('expiryInfo');
+  el.textContent = 'Detectando...'; el.style.color = '#888';
+  try {
+    const urlObj = new URL(url);
+    const user = urlObj.searchParams.get('username');
+    const pass = urlObj.searchParams.get('password');
+    if (user && pass) {
+      const info = await fetchXtreamInfo(urlObj.origin, user, pass);
+      showExpiry(info, el, $i('fExpiry'));
+    } else {
+      el.textContent = 'URL no es Xtream — ingresa fecha manualmente'; el.style.color = '#888';
+    }
+  } catch(e) { el.textContent = 'Ingresa la fecha manualmente'; el.style.color = '#888'; }
 };
 
-window.detectXtreamExpiry=async function(){
-  const server=$i('fXServer').value.trim();
-  const user=$i('fXUser').value.trim();
-  const pass=$i('fXPass').value.trim();
-  if(!server||!user||!pass) return;
-  $i('xExpiryInfo').textContent='Verificando...';$i('xExpiryInfo').style.color='#888';
-  try {
-    const resp=await fetch(`${server}/player_api.php?username=${user}&password=${pass}`);
-    const data=await resp.json();
-    if(data&&data.user_info&&data.user_info.exp_date){
-      const exp=new Date(parseInt(data.user_info.exp_date)*1000);
-      const days=Math.floor((exp-Date.now())/86400000);
-      $i('fExpiry').value=exp.toISOString().split('T')[0];
-      $i('xExpiryInfo').textContent=`✅ Expira: ${exp.toLocaleDateString('es')} (${days} días)`;
-      $i('xExpiryInfo').style.color=days<7?'#ff3355':days<30?'#ffaa00':'#00e87a';
-    } else {
-      $i('xExpiryInfo').textContent='No se pudo obtener expiración';$i('xExpiryInfo').style.color='#888';
-    }
-  } catch(e){$i('xExpiryInfo').textContent='Error al conectar';$i('xExpiryInfo').style.color='#ff3355';}
+window.detectXtreamExpiry = async function() {
+  const server = $i('fXServer').value.trim();
+  const user = $i('fXUser').value.trim();
+  const pass = $i('fXPass').value.trim();
+  if (!server || !user || !pass) return;
+  const el = $i('xExpiryInfo');
+  el.textContent = 'Detectando...'; el.style.color = '#888';
+  const info = await fetchXtreamInfo(server, user, pass);
+  showExpiry(info, el, $i('fExpiry'));
 };
 
 window.saveMAC=async function(){
