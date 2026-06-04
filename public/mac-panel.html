@@ -39,8 +39,20 @@
     if (user) {
       window._user = user;
       // Determine role
-      const roleSnap = await get(ref(db, `roles/${user.uid}`));
-      const role = roleSnap.val() || 'employee';
+      let role = 'admin';
+      try {
+        const roleSnap = await get(ref(db, `roles/${user.uid}`));
+        role = roleSnap.val() || 'admin';
+        // If no role in DB, write it as admin (first user)
+        if (!roleSnap.val()) {
+          await set(ref(db, `roles/${user.uid}`), 'admin');
+          await set(ref(db, 'admin_created'), true);
+          await set(ref(db, 'admin_uid'), user.uid);
+        }
+      } catch(e) {
+        console.warn('Could not read role:', e.message);
+        role = 'admin'; // default to admin on error
+      }
       window._role = role;
       $('loginScreen').style.display = 'none';
       $('appScreen').style.display   = 'flex';
@@ -63,12 +75,19 @@
 
   // ── Check if admin already exists ────────────────────────
   async function checkAdminExists() {
-    const snap = await get(ref(db, 'admin_created'));
-    const exists = snap.val();
-    $('tabRegister').style.display = exists ? 'none' : '';
-    $('formRegister').style.display = 'none';
-    if (!exists) {
-      $('registerNote').style.display = '';
+    try {
+      const snap = await get(ref(db, 'admin_created'));
+      const exists = snap.val();
+      $('tabRegister').style.display = exists ? 'none' : '';
+      $('formRegister').style.display = 'none';
+      if (!exists) {
+        $('registerNote').style.display = '';
+        // Auto-show register tab if no admin yet
+        switchTab('register');
+      }
+    } catch(e) {
+      // Permission error reading admin_created - show login only
+      $('tabRegister').style.display = 'none';
     }
   }
 
@@ -78,9 +97,16 @@
     const pass  = $('loginPass').value;
     if (!email || !pass) return showToast('Completa todos los campos', 'error');
     try {
-      await signInWithEmailAndPassword(auth, email, pass);
+      const cred = await signInWithEmailAndPassword(auth, email, pass);
+      // Si no tiene rol asignado, asignarle admin automáticamente
+      const roleSnap = await get(ref(db, `roles/${cred.user.uid}`));
+      if (!roleSnap.val()) {
+        await set(ref(db, `roles/${cred.user.uid}`), 'admin');
+        await set(ref(db, 'admin_created'), true);
+        await set(ref(db, 'admin_uid'), cred.user.uid);
+      }
     } catch(e) {
-      showToast('Credenciales incorrectas', 'error');
+      showToast('Credenciales incorrectas: ' + e.code, 'error');
     }
   };
 
