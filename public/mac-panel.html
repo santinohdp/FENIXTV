@@ -3,607 +3,523 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Fenix TV — Panel de Control</title>
-
+<title>Fenix TV — Panel</title>
 <script type="module">
-  import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
-  import { getAuth, createUserWithEmailAndPassword, signInWithEmailAndPassword, onAuthStateChanged, signOut, fetchSignInMethodsForEmail } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js";
-  import { getDatabase, ref, set, get, update, remove, onValue, push } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-database.js";
+import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
+import { getAuth, createUserWithEmailAndPassword, signInWithEmailAndPassword, onAuthStateChanged, signOut } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js";
+import { getDatabase, ref, set, get, update, remove, onValue } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-database.js";
 
-  const firebaseConfig = {
-    apiKey: "AIzaSyAmJtRakmbWFeNA7o9ii-Wj2ESbnZLGFcE",
-    authDomain: "helio-santino-rp.firebaseapp.com",
-    databaseURL: "https://helio-santino-rp-default-rtdb.firebaseio.com",
-    projectId: "helio-santino-rp",
-    storageBucket: "helio-santino-rp.firebasestorage.app",
-    messagingSenderId: "1052683565512",
-    appId: "1:1052683565512:web:e7ce898109ea18cfdda8fd"
-  };
+const firebaseConfig = {
+  apiKey:"AIzaSyAmJtRakmbWFeNA7o9ii-Wj2ESbnZLGFcE",
+  authDomain:"helio-santino-rp.firebaseapp.com",
+  databaseURL:"https://helio-santino-rp-default-rtdb.firebaseio.com",
+  projectId:"helio-santino-rp",
+  storageBucket:"helio-santino-rp.firebasestorage.app",
+  messagingSenderId:"1052683565512",
+  appId:"1:1052683565512:web:e7ce898109ea18cfdda8fd"
+};
+const fbApp = initializeApp(firebaseConfig);
+const auth  = getAuth(fbApp);
+const db    = getDatabase(fbApp);
 
-  const fbApp = initializeApp(firebaseConfig);
-  const auth  = getAuth(fbApp);
-  const db    = getDatabase(fbApp);
+function $i(id){ return document.getElementById(id); }
+function showToast(msg,type='success'){
+  const t=$i('toast');t.textContent=msg;
+  t.className='toast show '+(type==='error'?'err':'ok');
+  setTimeout(()=>t.className='toast',3500);
+}
 
-  // ── Helpers ──────────────────────────────────────────────
-  function showToast(msg, type='success') {
-    const t = document.getElementById('toast');
-    t.textContent = msg;
-    t.className = 'toast show ' + type;
-    setTimeout(() => t.className = 'toast', 3200);
-  }
-
-  function $(id) { return document.getElementById(id); }
-
-  // ── Auth state ───────────────────────────────────────────
-  onAuthStateChanged(auth, async (user) => {
-    if (user) {
-      window._user = user;
-      // Determine role
-      let role = 'admin';
-      try {
-        const roleSnap = await get(ref(db, `roles/${user.uid}`));
-        role = roleSnap.val() || 'admin';
-        // If no role in DB, write it as admin (first user)
-        if (!roleSnap.val()) {
-          await set(ref(db, `roles/${user.uid}`), 'admin');
-          await set(ref(db, 'admin_created'), true);
-          await set(ref(db, 'admin_uid'), user.uid);
-        }
-      } catch(e) {
-        console.warn('Could not read role:', e.message);
-        role = 'admin'; // default to admin on error
+// ── Auth ──────────────────────────────────────────────────
+onAuthStateChanged(auth, async user => {
+  if(user){
+    window._user = user;
+    let role = 'admin';
+    try {
+      const rs = await get(ref(db,`roles/${user.uid}`));
+      role = rs.val() || 'admin';
+      if(!rs.val()){
+        await set(ref(db,`roles/${user.uid}`),'admin');
+        await set(ref(db,'admin_created'),true);
+        await set(ref(db,'admin_uid'),user.uid);
       }
-      window._role = role;
-      $('loginScreen').style.display = 'none';
-      $('appScreen').style.display   = 'flex';
-      $('userEmail').textContent = user.email;
-      $('userRole').textContent  = role === 'admin' ? '👑 Admin' : '👤 Empleado';
-      // Show/hide admin-only sections
-      document.querySelectorAll('.admin-only').forEach(el => {
-        el.style.display = role === 'admin' ? '' : 'none';
-      });
-      loadMACs();
-      if (role === 'admin') loadEmployees();
-    } else {
-      window._user = null;
-      window._role = null;
-      $('loginScreen').style.display = 'flex';
-      $('appScreen').style.display   = 'none';
-      checkAdminExists();
+    } catch(e){ role='admin'; }
+    window._role = role;
+    $i('loginScreen').style.display='none';
+    $i('appScreen').style.display='flex';
+    $i('userEmail').textContent=user.email;
+    $i('userRole').textContent=role==='admin'?'👑 Admin':'👤 Empleado';
+    document.querySelectorAll('.admin-only').forEach(el=>el.style.display=role==='admin'?'':'none');
+    loadMACs();
+    if(role==='admin') loadPending();
+  } else {
+    window._user=null;
+    $i('loginScreen').style.display='flex';
+    $i('appScreen').style.display='none';
+    checkAdminExists();
+  }
+});
+
+async function checkAdminExists(){
+  try {
+    const s = await get(ref(db,'admin_created'));
+    const exists = s.val();
+    $i('tabRegister').style.display = exists?'none':'';
+    if(!exists) switchTab('register');
+  } catch(e){ $i('tabRegister').style.display='none'; }
+}
+
+window.doLogin = async function(){
+  const email=$i('loginEmail').value.trim(), pass=$i('loginPass').value;
+  if(!email||!pass) return showToast('Completa los campos','error');
+  try {
+    const cred = await signInWithEmailAndPassword(auth,email,pass);
+    const rs = await get(ref(db,`roles/${cred.user.uid}`));
+    if(!rs.val()){
+      await set(ref(db,`roles/${cred.user.uid}`),'admin');
+      await set(ref(db,'admin_created'),true);
+      await set(ref(db,'admin_uid'),cred.user.uid);
     }
+  } catch(e){ showToast('Credenciales incorrectas','error'); }
+};
+
+window.doRegister = async function(){
+  const email=$i('regEmail').value.trim(),pass=$i('regPass').value,pass2=$i('regPass2').value;
+  if(!email||!pass) return showToast('Completa los campos','error');
+  if(pass!==pass2) return showToast('Las contraseñas no coinciden','error');
+  if(pass.length<6) return showToast('Mínimo 6 caracteres','error');
+  const s=await get(ref(db,'admin_created'));
+  if(s.val()) return showToast('Ya existe un administrador','error');
+  try {
+    const cred=await createUserWithEmailAndPassword(auth,email,pass);
+    await set(ref(db,`roles/${cred.user.uid}`),'admin');
+    await set(ref(db,'admin_created'),true);
+    await set(ref(db,'admin_uid'),cred.user.uid);
+    showToast('Cuenta admin creada');
+  } catch(e){ showToast('Error: '+e.message,'error'); }
+};
+
+window.doLogout = async()=>{ await signOut(auth); };
+
+// ── MACs ──────────────────────────────────────────────────
+function loadMACs(){
+  onValue(ref(db,'mac_index'), snap=>{
+    const data=snap.val()||{};
+    renderMACs(data);
   });
+}
 
-  // ── Check if admin already exists ────────────────────────
-  async function checkAdminExists() {
-    try {
-      const snap = await get(ref(db, 'admin_created'));
-      const exists = snap.val();
-      $('tabRegister').style.display = exists ? 'none' : '';
-      $('formRegister').style.display = 'none';
-      if (!exists) {
-        $('registerNote').style.display = '';
-        // Auto-show register tab if no admin yet
-        switchTab('register');
-      }
-    } catch(e) {
-      // Permission error reading admin_created - show login only
-      $('tabRegister').style.display = 'none';
+function renderMACs(data){
+  const tbody=$i('macTableBody');
+  tbody.innerHTML='';
+  const keys=Object.keys(data);
+  $i('statTotal').textContent=keys.length;
+  $i('statActive').textContent=keys.filter(k=>data[k].url).length;
+  if(keys.length===0){tbody.innerHTML='<tr><td colspan="6" class="empty">No hay dispositivos registrados</td></tr>';return;}
+  keys.forEach(key=>{
+    const m=data[key];
+    const lbl = m.listType==='xtream'
+      ? `<span class="badge xt">Xtream</span> ${m.xtreamServer||''}`
+      : `<span class="badge m3">M3U</span> ${(m.url||'').substring(0,35)}...`;
+    // Expiry badge
+    let expBadge='';
+    if(m.expiry){
+      const d=new Date(m.expiry);
+      const days=Math.floor((d-Date.now())/86400000);
+      const color=days<7?'var(--red)':days<30?'#ffaa00':'var(--green)';
+      expBadge=`<span style="color:${color};font-size:11px;font-weight:700;">${days<0?'EXPIRADA':days+'d'}</span>`;
     }
-  }
+    const tr=document.createElement('tr');
+    tr.innerHTML=`
+      <td><span class="mac">${m.mac||key}</span></td>
+      <td>${m.name||'—'}</td>
+      <td>${lbl}</td>
+      <td>${expBadge||'—'}</td>
+      <td><span class="st ${m.url?'on':'off'}">${m.url?'Activa':'Sin lista'}</span></td>
+      <td class="acts">
+        <button class="bi edit" onclick="openEdit('${key}')">✏️</button>
+        <button class="bi del admin-only" onclick="deleteMAC('${key}')">🗑️</button>
+      </td>`;
+    tbody.appendChild(tr);
+  });
+}
 
-  // ── Login ─────────────────────────────────────────────────
-  window.doLogin = async function() {
-    const email = $('loginEmail').value.trim();
-    const pass  = $('loginPass').value;
-    if (!email || !pass) return showToast('Completa todos los campos', 'error');
-    try {
-      const cred = await signInWithEmailAndPassword(auth, email, pass);
-      // Si no tiene rol asignado, asignarle admin automáticamente
-      const roleSnap = await get(ref(db, `roles/${cred.user.uid}`));
-      if (!roleSnap.val()) {
-        await set(ref(db, `roles/${cred.user.uid}`), 'admin');
-        await set(ref(db, 'admin_created'), true);
-        await set(ref(db, 'admin_uid'), cred.user.uid);
-      }
-    } catch(e) {
-      showToast('Credenciales incorrectas: ' + e.code, 'error');
-    }
-  };
+window.deleteMAC = async function(key){
+  if(window._role!=='admin') return showToast('Sin permisos','error');
+  if(!confirm('¿Eliminar?')) return;
+  const uid=(await get(ref(db,'admin_uid'))).val();
+  await remove(ref(db,`users/${uid}/macs/${key}`));
+  await remove(ref(db,`mac_index/${key}`));
+  showToast('MAC eliminada');
+};
 
-  // ── Register ADMIN (solo una vez) ────────────────────────
-  window.doRegister = async function() {
-    const email = $('regEmail').value.trim();
-    const pass  = $('regPass').value;
-    const pass2 = $('regPass2').value;
-    if (!email || !pass) return showToast('Completa todos los campos', 'error');
-    if (pass !== pass2)  return showToast('Las contraseñas no coinciden', 'error');
-    if (pass.length < 6) return showToast('Mínimo 6 caracteres', 'error');
+window.openAddMAC=function(){
+  $i('modalTitle').textContent='Agregar dispositivo';
+  $i('editKey').value='';
+  $i('fMac').value='';$i('fName').value='';
+  $i('fListType').value='m3u';toggleFields();
+  $i('fUrl').value='';$i('fXServer').value='';$i('fXUser').value='';$i('fXPass').value='';
+  $i('fExpiry').value='';$i('expiryInfo').textContent='';
+  $i('macModal').style.display='flex';
+};
 
-    // Verificar que no exista admin
-    const snap = await get(ref(db, 'admin_created'));
-    if (snap.val()) return showToast('Ya existe un administrador registrado', 'error');
+window.openEdit=async function(key){
+  const s=await get(ref(db,`mac_index/${key}`));
+  const m=s.val();if(!m)return;
+  $i('modalTitle').textContent='Editar dispositivo';
+  $i('editKey').value=key;$i('fMac').value=m.mac||'';$i('fName').value=m.name||'';
+  $i('fListType').value=m.listType||'m3u';toggleFields();
+  $i('fUrl').value=m.url||'';$i('fXServer').value=m.xtreamServer||'';
+  $i('fXUser').value=m.xtreamUser||'';$i('fXPass').value=m.xtreamPass||'';
+  if(m.expiry){$i('fExpiry').value=new Date(m.expiry).toISOString().split('T')[0];}
+  $i('expiryInfo').textContent='';
+  $i('macModal').style.display='flex';
+};
 
-    try {
-      const cred = await createUserWithEmailAndPassword(auth, email, pass);
-      await set(ref(db, `roles/${cred.user.uid}`), 'admin');
-      await set(ref(db, 'admin_created'), true);
-      await set(ref(db, 'admin_uid'), cred.user.uid);
-      showToast('Cuenta admin creada');
-    } catch(e) {
-      showToast('Error: ' + e.message, 'error');
-    }
-  };
+window.closeModal=()=>$i('macModal').style.display='none';
+window.toggleFields=function(){
+  const t=$i('fListType').value;
+  $i('m3uF').style.display=t==='m3u'?'block':'none';
+  $i('xtF').style.display=t==='xtream'?'block':'none';
+};
+window.selectType=function(t){
+  $i('fListType').value=t;
+  $i('btnM3U').classList.toggle('sel',t==='m3u');
+  $i('btnXt').classList.toggle('sel',t==='xtream');
+  toggleFields();
+};
 
-  window.doLogout = async function() {
-    await signOut(auth);
-  };
-
-  window.loadPending = async function() {
-    const snap = await get(ref(db, 'pending_macs'));
-    const data = snap.val() || {};
-    const tbody = $('pendingTableBody');
-    if (!tbody) return;
-    const entries = Object.entries(data);
-    if (entries.length === 0) {
-      tbody.innerHTML = '<tr><td colspan="4" class="empty-row">No hay dispositivos pendientes</td></tr>';
-      return;
-    }
-    tbody.innerHTML = '';
-    entries.sort((a,b) => (b[1].ts||0) - (a[1].ts||0)).forEach(([key, val]) => {
-      const ago = val.ts ? Math.floor((Date.now()-val.ts)/1000) : '?';
-      const agoStr = ago < 60 ? ago+'s' : ago < 3600 ? Math.floor(ago/60)+'m' : Math.floor(ago/3600)+'h';
-      const tr = document.createElement('tr');
-      tr.innerHTML = `
-        <td><span class="mac-addr" style="font-size:12px;">${val.deviceId||key}</span>
-            <button onclick="copyToClipboard('${val.deviceId||key}')" style="background:none;border:none;cursor:pointer;color:var(--accent);font-size:12px;margin-left:6px;">📋</button></td>
-        <td><span style="font-family:monospace;font-size:12px;color:var(--muted);">${val.mac||'—'}</span></td>
-        <td style="color:var(--muted);font-size:13px;">${agoStr} atrás</td>
-        <td>
-          <button class="btn-icon edit" onclick="quickAdd('${val.deviceId||key}','${val.mac||''}')" title="Agregar lista a este dispositivo">➕</button>
-          <button class="btn-icon del" onclick="deletePending('${key}')">🗑️</button>
-        </td>`;
-      tbody.appendChild(tr);
-    });
-  };
-
-  window.copyToClipboard = function(text) {
-    navigator.clipboard.writeText(text).then(() => showToast('Copiado: ' + text));
-  };
-
-  window.quickAdd = function(deviceId, mac) {
-    openAddMAC();
-    setTimeout(() => {
-      $('fMac').value = deviceId;
-      $('fName').value = 'Dispositivo ' + deviceId.substr(0,6);
-    }, 100);
-  };
-
-  window.deletePending = async function(key) {
-    await remove(ref(db, 'pending_macs/' + key));
-    loadPending();
-  };
-
-  // ── MACs ─────────────────────────────────────────────────
-  function loadMACs() {
-    const uid = $('appScreen').dataset.uid = window._user.uid;
-    // Admin ve todas las MACs de todos los usuarios
-    if (window._role === 'admin') {
-      onValue(ref(db, 'mac_index'), snap => {
-        renderMACs(snap.val() || {});
-      });
-    } else {
-      // Empleado solo ve sus propias MACs
-      onValue(ref(db, `employee_macs/${window._user.uid}`), snap => {
-        const keys = snap.val() || {};
-        // Fetch each mac from mac_index
-        get(ref(db, 'mac_index')).then(allSnap => {
-          const all = allSnap.val() || {};
-          const filtered = {};
-          Object.keys(keys).forEach(k => { if (all[k]) filtered[k] = all[k]; });
-          renderMACs(filtered);
-        });
-      });
-    }
-  }
-
-  function renderMACs(data) {
-    const tbody = $('macTableBody');
-    tbody.innerHTML = '';
-    const keys = Object.keys(data);
-    if (keys.length === 0) {
-      tbody.innerHTML = '<tr><td colspan="5" class="empty-row">No hay MACs registradas</td></tr>';
-      $('statTotal').textContent  = '0';
-      $('statActive').textContent = '0';
-      return;
-    }
-    $('statTotal').textContent  = keys.length;
-    $('statActive').textContent = keys.filter(k => data[k].url).length;
-    keys.forEach(key => {
-      const m = data[key];
-      const lbl = m.listType === 'xtream'
-        ? `<span class="badge xtream">Xtream</span> ${m.xtreamServer||''}`
-        : `<span class="badge m3u">M3U</span> ${(m.url||'').substring(0,40)}...`;
-      const tr = document.createElement('tr');
-      tr.innerHTML = `
-        <td><span class="mac-addr">${m.mac||key}</span></td>
-        <td>${m.name||'—'}</td>
-        <td>${lbl}</td>
-        <td><span class="status ${m.url?'on':'off'}">${m.url?'Activa':'Sin lista'}</span></td>
-        <td class="actions">
-          <button class="btn-icon edit" onclick="openEdit('${key}')">✏️</button>
-          <button class="btn-icon del admin-only" onclick="deleteMAC('${key}')" style="${window._role==='admin'?'':'display:none'}">🗑️</button>
-        </td>`;
-      tbody.appendChild(tr);
-    });
-  }
-
-  window.deleteMAC = async function(key) {
-    if (window._role !== 'admin') return showToast('Sin permisos', 'error');
-    if (!confirm('¿Eliminar esta MAC?')) return;
-    const adminUid = (await get(ref(db, 'admin_uid'))).val();
-    await remove(ref(db, `users/${adminUid}/macs/${key}`));
-    await remove(ref(db, `mac_index/${key}`));
-    showToast('MAC eliminada');
-  };
-
-  window.openAddMAC = function() {
-    $('modalTitle').textContent = 'Agregar MAC';
-    $('editKey').value = '';
-    $('fMac').value = '';
-    $('fName').value = '';
-    $('fListType').value = 'm3u';
-    toggleListFields();
-    $('fUrl').value = '';
-    $('fXServer').value = '';
-    $('fXUser').value = '';
-    $('fXPass').value = '';
-    $('macModal').style.display = 'flex';
-  };
-
-  window.openEdit = async function(key) {
-    const snap = await get(ref(db, `mac_index/${key}`));
-    const m = snap.val();
-    if (!m) return;
-    $('modalTitle').textContent = 'Editar MAC';
-    $('editKey').value = key;
-    $('fMac').value = m.mac || '';
-    $('fName').value = m.name || '';
-    $('fListType').value = m.listType || 'm3u';
-    toggleListFields();
-    $('fUrl').value = m.url || '';
-    $('fXServer').value = m.xtreamServer || '';
-    $('fXUser').value = m.xtreamUser || '';
-    $('fXPass').value = m.xtreamPass || '';
-    $('macModal').style.display = 'flex';
-  };
-
-  window.closeModal = function() { $('macModal').style.display = 'none'; };
-
-  window.toggleListFields = function() {
-    const t = $('fListType').value;
-    $('m3uFields').style.display    = t === 'm3u'    ? 'block' : 'none';
-    $('xtreamFields').style.display = t === 'xtream' ? 'block' : 'none';
-  };
-
-  window.saveMAC = async function() {
-    const key      = $('editKey').value;
-    const mac      = $('fMac').value.trim().toUpperCase();
-    const name     = $('fName').value.trim();
-    const listType = $('fListType').value;
-    if (!mac) return showToast('Ingresa la dirección MAC', 'error');
-
-    let payload = { mac, name, listType, updatedAt: Date.now() };
-    if (listType === 'm3u') {
-      const url = $('fUrl').value.trim();
-      if (!url) return showToast('Ingresa la URL M3U', 'error');
-      payload.url = url;
-    } else {
-      const server = $('fXServer').value.trim();
-      const user   = $('fXUser').value.trim();
-      const pass   = $('fXPass').value.trim();
-      if (!server||!user||!pass) return showToast('Completa datos Xtream', 'error');
-      payload.xtreamServer = server;
-      payload.xtreamUser   = user;
-      payload.xtreamPass   = pass;
-      payload.url = `${server}/get.php?username=${user}&password=${pass}&type=m3u_plus`;
-    }
-
-    const macKey = mac.replace(/:/g, '-');
-    const adminUid = (await get(ref(db, 'admin_uid'))).val();
-
-    // Guardar en users/{adminUid}/macs/ y en mac_index
-    await set(ref(db, `users/${adminUid}/macs/${macKey}`), { ...payload, list: payload.url });
-    await set(ref(db, `mac_index/${macKey}`), payload);
-
-    // Si es empleado, registrar que esta MAC le pertenece
-    if (window._role === 'employee') {
-      await set(ref(db, `employee_macs/${window._user.uid}/${macKey}`), true);
-    }
-
-    showToast(key ? 'MAC actualizada' : 'MAC agregada');
-    closeModal();
-  };
-
-  // ── Código de proveedor ──────────────────────────────────
-  let _providerTimer = null;
-
-  async function loadProviderCode() {
-    const snap = await get(ref(db, 'app_config/provider_code_data'));
-    const data = snap.val();
-    if (data && data.code && data.expiresAt) {
-      const remaining = Math.floor((data.expiresAt - Date.now()) / 1000);
-      if (remaining > 0) {
-        renderProviderCode(data.code, remaining);
-      } else {
-        // Expired — clear it
-        await set(ref(db, 'app_config/provider_code_data'), { code: '', expiresAt: 0 });
-        $('providerCodeDisplay').textContent = '— EXPIRADO —';
-        $('providerCodeDisplay').style.color = 'var(--red)';
-        $('providerTimerBar').style.width = '0%';
-        $('providerTimerText').textContent = 'Código expirado. Genera uno nuevo.';
-      }
-    } else {
-      $('providerCodeDisplay').textContent = '—';
-      $('providerTimerText').textContent = 'Sin código activo';
-    }
-  }
-
-  function renderProviderCode(code, remainingSeconds) {
-    if (_providerTimer) clearInterval(_providerTimer);
-    const TOTAL = 120;
-    let left = remainingSeconds;
-
-    $('providerCodeDisplay').textContent = code;
-    $('providerCodeDisplay').style.color = 'var(--accent)';
-
-    function updateUI() {
-      if (left <= 0) {
-        clearInterval(_providerTimer);
-        $('providerCodeDisplay').textContent = '— EXPIRADO —';
-        $('providerCodeDisplay').style.color = 'var(--red)';
-        $('providerTimerBar').style.width = '0%';
-        $('providerTimerBar').style.background = 'var(--red)';
-        $('providerTimerText').textContent = 'Código expirado. Genera uno nuevo.';
-        // Invalidate in Firebase
-        set(ref(db, 'app_config/provider_code_data'), { code: '', expiresAt: 0 });
+// Check M3U expiry from URL
+window.detectExpiry=async function(){
+  const url=$i('fUrl').value.trim();
+  if(!url){return;}
+  $i('expiryInfo').textContent='Verificando expiración...';
+  $i('expiryInfo').style.color='#888';
+  try {
+    // Try to get Xtream user_info from the URL
+    // If it's a get.php URL, parse credentials and call user_info
+    const urlObj=new URL(url);
+    const username=urlObj.searchParams.get('username');
+    const password=urlObj.searchParams.get('password');
+    const base=urlObj.origin;
+    if(username&&password){
+      const infoUrl=`${base}/player_api.php?username=${username}&password=${password}`;
+      const resp=await fetch(infoUrl);
+      const data=await resp.json();
+      if(data&&data.user_info&&data.user_info.exp_date){
+        const exp=new Date(parseInt(data.user_info.exp_date)*1000);
+        const days=Math.floor((exp-Date.now())/86400000);
+        $i('fExpiry').value=exp.toISOString().split('T')[0];
+        $i('expiryInfo').textContent=`✅ Expira: ${exp.toLocaleDateString('es')} (${days} días)`;
+        $i('expiryInfo').style.color=days<7?'#ff3355':days<30?'#ffaa00':'#00e87a';
         return;
       }
-      const pct = (left / TOTAL) * 100;
-      $('providerTimerBar').style.width = pct + '%';
-      $('providerTimerBar').style.background = left > 40 ? 'var(--accent)' : left > 15 ? '#ffaa00' : 'var(--red)';
-      $('providerCodeDisplay').style.color = left > 15 ? 'var(--accent)' : 'var(--red)';
-      const m = Math.floor(left / 60);
-      const s = left % 60;
-      $('providerTimerText').textContent = `Expira en ${m}:${s.toString().padStart(2,'0')}`;
-      left--;
     }
-
-    updateUI();
-    _providerTimer = setInterval(updateUI, 1000);
+    $i('expiryInfo').textContent='No se pudo detectar expiración automáticamente';
+    $i('expiryInfo').style.color='#888';
+  } catch(e){
+    $i('expiryInfo').textContent='Ingresa la fecha manualmente';
+    $i('expiryInfo').style.color='#888';
   }
+};
 
-  window.generateProviderCode = async function() {
-    if (window._role !== 'admin') return;
-    if (_providerTimer) clearInterval(_providerTimer);
-    const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
-    let code = '';
-    for (let i = 0; i < 8; i++) code += chars[Math.floor(Math.random()*chars.length)];
-    const expiresAt = Date.now() + 120000; // 2 minutos
-    await set(ref(db, 'app_config/provider_code_data'), { code, expiresAt });
-    showToast('Código generado: ' + code + ' (válido 2 min)');
-    renderProviderCode(code, 120);
-  };
-
-  // ── Empleados ────────────────────────────────────────────
-  async function loadEmployees() {
-    const snap = await get(ref(db, 'employees'));
-    const data = snap.val() || {};
-    const tbody = $('empTableBody');
-    if (!tbody) return;
-    tbody.innerHTML = '';
-    const entries = Object.entries(data);
-    if (entries.length === 0) {
-      tbody.innerHTML = '<tr><td colspan="3" class="empty-row">No hay empleados registrados</td></tr>';
-      return;
+window.detectXtreamExpiry=async function(){
+  const server=$i('fXServer').value.trim();
+  const user=$i('fXUser').value.trim();
+  const pass=$i('fXPass').value.trim();
+  if(!server||!user||!pass) return;
+  $i('xExpiryInfo').textContent='Verificando...';$i('xExpiryInfo').style.color='#888';
+  try {
+    const resp=await fetch(`${server}/player_api.php?username=${user}&password=${pass}`);
+    const data=await resp.json();
+    if(data&&data.user_info&&data.user_info.exp_date){
+      const exp=new Date(parseInt(data.user_info.exp_date)*1000);
+      const days=Math.floor((exp-Date.now())/86400000);
+      $i('fExpiry').value=exp.toISOString().split('T')[0];
+      $i('xExpiryInfo').textContent=`✅ Expira: ${exp.toLocaleDateString('es')} (${days} días)`;
+      $i('xExpiryInfo').style.color=days<7?'#ff3355':days<30?'#ffaa00':'#00e87a';
+    } else {
+      $i('xExpiryInfo').textContent='No se pudo obtener expiración';$i('xExpiryInfo').style.color='#888';
     }
-    entries.forEach(([uid, emp]) => {
-      const tr = document.createElement('tr');
-      tr.innerHTML = `<td>${emp.email}</td><td><span class="badge m3u">Empleado</span></td>
-        <td><button class="btn-icon del" onclick="deleteEmployee('${uid}')">🗑️</button></td>`;
-      tbody.appendChild(tr);
-    });
+  } catch(e){$i('xExpiryInfo').textContent='Error al conectar';$i('xExpiryInfo').style.color='#ff3355';}
+};
+
+window.saveMAC=async function(){
+  const key=$i('editKey').value;
+  const mac=$i('fMac').value.trim().toUpperCase();
+  const name=$i('fName').value.trim();
+  const listType=$i('fListType').value;
+  const expiryStr=$i('fExpiry').value;
+  if(!mac) return showToast('Ingresa el ID/MAC','error');
+  let payload={mac,name,listType,updatedAt:Date.now()};
+  if(expiryStr) payload.expiry=new Date(expiryStr).getTime();
+  if(listType==='m3u'){
+    const url=$i('fUrl').value.trim();
+    if(!url) return showToast('Ingresa la URL','error');
+    payload.url=url;
+  } else {
+    const srv=$i('fXServer').value.trim(),u=$i('fXUser').value.trim(),p=$i('fXPass').value.trim();
+    if(!srv||!u||!p) return showToast('Completa datos Xtream','error');
+    payload.xtreamServer=srv;payload.xtreamUser=u;payload.xtreamPass=p;
+    payload.url=`${srv}/get.php?username=${u}&password=${p}&type=m3u_plus`;
   }
+  const macKey=mac.replace(/:/g,'-');
+  const uid=(await get(ref(db,'admin_uid'))).val();
+  await set(ref(db,`users/${uid}/macs/${macKey}`),{...payload,list:payload.url});
+  await set(ref(db,`mac_index/${macKey}`),payload);
+  showToast(key?'Actualizado':'Agregado');closeModal();
+};
 
-  window.openAddEmployee = function() {
-    $('empModal').style.display = 'flex';
-    $('empEmail').value = '';
-    $('empPass').value  = '';
-  };
-  window.closeEmpModal = function() { $('empModal').style.display = 'none'; };
+// ── Pendientes ────────────────────────────────────────────
+async function loadPending(){
+  const s=await get(ref(db,'pending_macs'));
+  const data=s.val()||{};
+  const tbody=$i('pendingBody');if(!tbody)return;
+  const entries=Object.entries(data).sort((a,b)=>(b[1].ts||0)-(a[1].ts||0));
+  if(entries.length===0){tbody.innerHTML='<tr><td colspan="4" class="empty">Sin dispositivos pendientes</td></tr>';return;}
+  tbody.innerHTML='';
+  entries.forEach(([key,val])=>{
+    const ago=val.ts?Math.floor((Date.now()-val.ts)/1000):0;
+    const agoStr=ago<60?ago+'s':ago<3600?Math.floor(ago/60)+'m':Math.floor(ago/3600)+'h';
+    const tr=document.createElement('tr');
+    tr.innerHTML=`
+      <td><span class="mac" style="font-size:11px;">${val.deviceId||key}</span>
+          <button onclick="copyText('${val.deviceId||key}')" class="copy-btn">📋</button></td>
+      <td style="font-family:monospace;font-size:11px;color:var(--muted);">${val.mac||'—'}</td>
+      <td style="color:var(--muted);font-size:13px;">${agoStr} atrás</td>
+      <td><button class="bi edit" onclick="quickAdd('${val.deviceId||key}')" title="Asignar lista">➕</button>
+          <button class="bi del" onclick="delPending('${key}')">🗑️</button></td>`;
+    tbody.appendChild(tr);
+  });
+}
+window.loadPending=loadPending;
+window.copyText=function(t){navigator.clipboard.writeText(t).then(()=>showToast('Copiado: '+t));};
+window.quickAdd=function(id){openAddMAC();setTimeout(()=>{$i('fMac').value=id;$i('fName').value='Dispositivo '+id.substr(0,6);},100);};
+window.delPending=async function(k){await remove(ref(db,'pending_macs/'+k));loadPending();};
 
-  window.saveEmployee = async function() {
-    const email = $('empEmail').value.trim();
-    const pass  = $('empPass').value;
-    if (!email || !pass) return showToast('Completa todos los campos', 'error');
-    if (pass.length < 6) return showToast('Mínimo 6 caracteres', 'error');
-    try {
-      const cred = await createUserWithEmailAndPassword(auth, email, pass);
-      await set(ref(db, `roles/${cred.user.uid}`), 'employee');
-      await set(ref(db, `employees/${cred.user.uid}`), { email, createdAt: Date.now() });
-      // Re-login as admin (createUser cambia el usuario activo)
-      showToast('Empleado creado: ' + email);
-      closeEmpModal();
-      loadEmployees();
-    } catch(e) {
-      showToast('Error: ' + e.message, 'error');
-    }
-  };
+// ── Empleados ────────────────────────────────────────────
+async function loadEmployees(){
+  const s=await get(ref(db,'employees'));
+  const data=s.val()||{};
+  const tbody=$i('empBody');if(!tbody)return;
+  const entries=Object.entries(data);
+  if(entries.length===0){tbody.innerHTML='<tr><td colspan="3" class="empty">No hay empleados</td></tr>';return;}
+  tbody.innerHTML='';
+  entries.forEach(([uid,emp])=>{
+    const tr=document.createElement('tr');
+    tr.innerHTML=`<td>${emp.email}</td><td><span class="badge m3">Empleado</span></td>
+      <td><button class="bi del" onclick="delEmployee('${uid}')">🗑️</button></td>`;
+    tbody.appendChild(tr);
+  });
+}
+window.loadEmployees=loadEmployees;
+window.openAddEmp=()=>{ $i('empModal').style.display='flex';$i('empEmail').value='';$i('empPass').value=''; };
+window.closeEmpModal=()=>$i('empModal').style.display='none';
 
-  window.deleteEmployee = async function(uid) {
-    if (!confirm('¿Eliminar empleado?')) return;
-    await remove(ref(db, `employees/${uid}`));
-    await remove(ref(db, `roles/${uid}`));
-    await remove(ref(db, `employee_macs/${uid}`));
-    showToast('Empleado eliminado');
+window.saveEmployee=async function(){
+  const email=$i('empEmail').value.trim();
+  const pass=$i('empPass').value;
+  if(!email||!pass) return showToast('Completa los campos','error');
+  if(pass.length<6) return showToast('Mínimo 6 caracteres','error');
+  // Save current admin user info to restore session after createUser
+  const adminEmail=window._user.email;
+  const adminPass=prompt('Para crear el empleado necesitamos verificar tu contraseña de admin:');
+  if(!adminPass) return;
+  try {
+    // Create employee account
+    const cred=await createUserWithEmailAndPassword(auth,email,pass);
+    const empUid=cred.user.uid;
+    await set(ref(db,`roles/${empUid}`),'employee');
+    await set(ref(db,`employees/${empUid}`),{email,createdAt:Date.now()});
+    // Re-login as admin
+    await signOut(auth);
+    await signInWithEmailAndPassword(auth,adminEmail,adminPass);
+    showToast('Empleado creado: '+email);
+    closeEmpModal();
     loadEmployees();
-  };
+  } catch(e){ showToast('Error: '+e.message,'error'); }
+};
 
-  // Expose for inline use
-  window._loadProviderCode = loadProviderCode;
-  window._loadEmployees    = loadEmployees;
+window.delEmployee=async function(uid){
+  if(!confirm('¿Eliminar empleado?')) return;
+  await remove(ref(db,`employees/${uid}`));
+  await remove(ref(db,`roles/${uid}`));
+  showToast('Empleado eliminado');loadEmployees();
+};
 
-  // Init provider code display when tab shown
-  document.addEventListener('DOMContentLoaded', () => {
-    // Tab switching
-    document.querySelectorAll('.nav-tab').forEach(btn => {
-      btn.addEventListener('click', () => {
-        document.querySelectorAll('.nav-tab').forEach(b => b.classList.remove('active'));
-        document.querySelectorAll('.tab-content').forEach(c => c.style.display = 'none');
-        btn.classList.add('active');
-        const target = btn.dataset.tab;
-        document.getElementById(target).style.display = 'block';
-        if (target === 'tabProvider') loadProviderCode();
-        if (target === 'tabEmployees') loadEmployees();
-        if (target === 'tabPending') loadPending();
-      });
+// ── Código proveedor ──────────────────────────────────────
+let _provTimer=null;
+async function loadProviderCode(){
+  const s=await get(ref(db,'app_config/provider_code_data'));
+  const d=s.val();
+  if(d&&d.code&&d.expiresAt&&d.expiresAt>Date.now()){
+    renderCodeUI(d.code,Math.floor((d.expiresAt-Date.now())/1000));
+  } else {
+    $i('codeDisplay').textContent='—';
+    $i('codeTimer').textContent='Sin código activo';
+    $i('codeBar').style.width='0%';
+  }
+}
+window.loadProviderCode=loadProviderCode;
+function renderCodeUI(code,secs){
+  if(_provTimer)clearInterval(_provTimer);
+  const TOTAL=120;let left=secs;
+  $i('codeDisplay').textContent=code;
+  function upd(){
+    if(left<=0){clearInterval(_provTimer);$i('codeDisplay').textContent='EXPIRADO';$i('codeDisplay').style.color='var(--red)';$i('codeTimer').textContent='Expirado';$i('codeBar').style.width='0%';set(ref(db,'app_config/provider_code_data'),{code:'',expiresAt:0});return;}
+    const p=(left/TOTAL)*100;
+    $i('codeBar').style.width=p+'%';
+    $i('codeBar').style.background=left>40?'var(--accent)':left>15?'#ffaa00':'var(--red)';
+    $i('codeDisplay').style.color=left>15?'var(--accent)':'var(--red)';
+    $i('codeTimer').textContent='Expira en '+Math.floor(left/60)+':'+(left%60).toString().padStart(2,'0');
+    left--;
+  }
+  upd();_provTimer=setInterval(upd,1000);
+}
+window.generateCode=async function(){
+  if(_provTimer)clearInterval(_provTimer);
+  const chars='ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+  let code='';for(let i=0;i<8;i++)code+=chars[Math.floor(Math.random()*chars.length)];
+  const expiresAt=Date.now()+120000;
+  await set(ref(db,'app_config/provider_code_data'),{code,expiresAt});
+  showToast('Código: '+code+' (2 min)');
+  renderCodeUI(code,120);
+};
+
+// ── Tabs ─────────────────────────────────────────────────
+document.addEventListener('DOMContentLoaded',()=>{
+  document.querySelectorAll('.nav-tab').forEach(btn=>{
+    btn.addEventListener('click',()=>{
+      document.querySelectorAll('.nav-tab').forEach(b=>b.classList.remove('active'));
+      document.querySelectorAll('.tab-pane').forEach(p=>p.style.display='none');
+      btn.classList.add('active');
+      const t=btn.dataset.tab;
+      $i(t).style.display='block';
+      if(t==='tPending')loadPending();
+      if(t==='tProvider')loadProviderCode();
+      if(t==='tEmployees')loadEmployees();
     });
   });
-
-  document.addEventListener('keydown', e => {
-    if (e.key === 'Enter' && $('loginScreen').style.display !== 'none') doLogin();
-  });
+});
 </script>
-
 <link href="https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&family=Syne:wght@400;600;800&display=swap" rel="stylesheet">
 <style>
-:root{--bg:#0a0a0f;--surface:#12121a;--surface2:#1a1a26;--border:#2a2a3a;--accent:#ff4f00;--accent2:#ff8c42;--text:#e8e8f0;--muted:#6666aa;--green:#00e87a;--red:#ff3355;--xtream:#a855f7;--m3u:#3b82f6;}
+:root{--bg:#0a0a0f;--s1:#12121a;--s2:#1a1a26;--bd:#2a2a3a;--ac:#ff4f00;--ac2:#ff8c42;--tx:#e8e8f0;--mu:#6666aa;--gn:#00e87a;--red:#ff3355;--xt:#a855f7;--m3:#3b82f6;}
 *{margin:0;padding:0;box-sizing:border-box;}
-body{background:var(--bg);color:var(--text);font-family:'Syne',sans-serif;min-height:100vh;}
-body::before{content:'';position:fixed;inset:0;background-image:linear-gradient(rgba(255,79,0,0.03) 1px,transparent 1px),linear-gradient(90deg,rgba(255,79,0,0.03) 1px,transparent 1px);background-size:40px 40px;pointer-events:none;z-index:0;}
-
+body{background:var(--bg);color:var(--tx);font-family:'Syne',sans-serif;min-height:100vh;}
+body::before{content:'';position:fixed;inset:0;background-image:linear-gradient(rgba(255,79,0,.03)1px,transparent 1px),linear-gradient(90deg,rgba(255,79,0,.03)1px,transparent 1px);background-size:40px 40px;pointer-events:none;}
 /* LOGIN */
 #loginScreen{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;z-index:100;background:var(--bg);}
-.login-box{width:420px;background:var(--surface);border:1px solid var(--border);border-top:3px solid var(--accent);padding:48px 40px;position:relative;z-index:1;box-shadow:0 0 60px rgba(255,79,0,0.1);}
-.login-logo{text-align:center;margin-bottom:32px;}
-.login-logo .logo-text{font-size:32px;font-weight:800;letter-spacing:-1px;}
-.login-logo .logo-text span{color:var(--accent);}
-.login-logo .logo-sub{font-family:'Space Mono',monospace;font-size:11px;color:var(--muted);letter-spacing:3px;margin-top:4px;}
-.tabs-auth{display:flex;margin-bottom:28px;border-bottom:1px solid var(--border);}
-.tab-btn{flex:1;background:none;border:none;padding:12px;font-family:'Syne',sans-serif;font-size:14px;font-weight:600;color:var(--muted);cursor:pointer;border-bottom:2px solid transparent;margin-bottom:-1px;transition:color .2s;}
-.tab-btn.active{color:var(--accent);border-bottom-color:var(--accent);}
-.auth-form{display:none;}
-.auth-form.active{display:block;}
-.note-box{background:rgba(255,79,0,0.08);border:1px solid rgba(255,79,0,0.25);padding:10px 14px;font-size:12px;color:var(--accent2);margin-bottom:16px;line-height:1.5;}
-.form-group{margin-bottom:16px;}
-.form-group label{display:block;font-size:11px;font-weight:600;letter-spacing:2px;color:var(--muted);margin-bottom:6px;text-transform:uppercase;}
-input[type="text"],input[type="email"],input[type="password"],input[type="url"],select{width:100%;background:var(--surface2);border:1px solid var(--border);color:var(--text);padding:10px 14px;font-family:'Space Mono',monospace;font-size:13px;outline:none;transition:border-color .2s;}
-input:focus,select:focus{border-color:var(--accent);}
-.btn-primary{width:100%;background:var(--accent);border:none;color:#fff;padding:13px;font-family:'Syne',sans-serif;font-size:15px;font-weight:800;cursor:pointer;letter-spacing:1px;transition:background .2s;text-transform:uppercase;margin-top:8px;}
-.btn-primary:hover{background:var(--accent2);}
-
+.lbox{width:420px;background:var(--s1);border:1px solid var(--bd);border-top:3px solid var(--ac);padding:48px 40px;box-shadow:0 0 60px rgba(255,79,0,.1);position:relative;z-index:1;}
+.llogo{text-align:center;margin-bottom:32px;}
+.llogo .lt{font-size:32px;font-weight:800;letter-spacing:-1px;}
+.llogo .lt span{color:var(--ac);}
+.llogo .ls{font-family:'Space Mono',monospace;font-size:11px;color:var(--mu);letter-spacing:3px;margin-top:4px;}
+.tabs-a{display:flex;margin-bottom:28px;border-bottom:1px solid var(--bd);}
+.tab-a{flex:1;background:none;border:none;border-bottom:2px solid transparent;padding:12px;font-family:'Syne',sans-serif;font-size:14px;font-weight:600;color:var(--mu);cursor:pointer;margin-bottom:-1px;}
+.tab-a.active{color:var(--ac);border-bottom-color:var(--ac);}
+.af{display:none;}.af.active{display:block;}
+.fg{margin-bottom:16px;}
+.fg label{display:block;font-size:11px;font-weight:600;letter-spacing:2px;color:var(--mu);margin-bottom:6px;text-transform:uppercase;}
+input[type=text],input[type=email],input[type=password],input[type=url],input[type=date],select,textarea{width:100%;background:var(--s2);border:1px solid var(--bd);color:var(--tx);padding:10px 14px;font-family:'Space Mono',monospace;font-size:13px;outline:none;transition:border-color .2s;}
+input:focus,select:focus{border-color:var(--ac);}
+.btn-p{width:100%;background:var(--ac);border:none;color:#fff;padding:13px;font-family:'Syne',sans-serif;font-size:15px;font-weight:800;cursor:pointer;letter-spacing:1px;text-transform:uppercase;margin-top:8px;}
+.btn-p:hover{background:var(--ac2);}
 /* APP */
 #appScreen{display:none;flex-direction:column;min-height:100vh;position:relative;z-index:1;}
-.topbar{display:flex;align-items:center;justify-content:space-between;padding:16px 32px;background:var(--surface);border-bottom:1px solid var(--border);position:sticky;top:0;z-index:50;}
-.topbar-logo{font-size:22px;font-weight:800;letter-spacing:-1px;}
-.topbar-logo span{color:var(--accent);}
-.topbar-right{display:flex;align-items:center;gap:12px;}
-#userEmail{font-family:'Space Mono',monospace;font-size:12px;color:var(--muted);}
-#userRole{font-size:12px;color:var(--accent2);font-weight:600;}
-.btn-logout{background:none;border:1px solid var(--border);color:var(--muted);padding:7px 16px;font-family:'Syne',sans-serif;font-size:13px;font-weight:600;cursor:pointer;transition:all .2s;}
-.btn-logout:hover{border-color:var(--red);color:var(--red);}
-
-/* NAV TABS */
-.nav-tabs-bar{display:flex;gap:0;border-bottom:1px solid var(--border);background:var(--surface);padding:0 32px;}
-.nav-tab{background:none;border:none;border-bottom:2px solid transparent;color:var(--muted);padding:14px 20px;font-family:'Syne',sans-serif;font-size:14px;font-weight:600;cursor:pointer;transition:all .2s;margin-bottom:-1px;}
-.nav-tab.active{color:var(--accent);border-bottom-color:var(--accent);}
-.nav-tab:hover{color:var(--text);}
-
-.tab-content{display:none;padding:32px;}
-.tab-content.default-tab{display:block;}
-
+.topbar{display:flex;align-items:center;justify-content:space-between;padding:16px 32px;background:var(--s1);border-bottom:1px solid var(--bd);position:sticky;top:0;z-index:50;}
+.tlogo{font-size:22px;font-weight:800;letter-spacing:-1px;}.tlogo span{color:var(--ac);}
+.tright{display:flex;align-items:center;gap:12px;}
+#userEmail{font-family:'Space Mono',monospace;font-size:12px;color:var(--mu);}
+#userRole{font-size:12px;color:var(--ac2);font-weight:600;}
+.btn-out{background:none;border:1px solid var(--bd);color:var(--mu);padding:7px 16px;font-family:'Syne',sans-serif;font-size:13px;font-weight:600;cursor:pointer;}
+.btn-out:hover{border-color:var(--red);color:var(--red);}
+/* NAV */
+.nav-bar{display:flex;border-bottom:1px solid var(--bd);background:var(--s1);padding:0 32px;}
+.nav-tab{background:none;border:none;border-bottom:2px solid transparent;color:var(--mu);padding:14px 20px;font-family:'Syne',sans-serif;font-size:14px;font-weight:600;cursor:pointer;margin-bottom:-1px;}
+.nav-tab.active{color:var(--ac);border-bottom-color:var(--ac);}
+.tab-pane{display:none;padding:32px;}
+.tab-pane.default{display:block;}
 /* STATS */
-.stats-row{display:grid;grid-template-columns:repeat(3,1fr);gap:16px;margin-bottom:32px;}
-.stat-card{background:var(--surface);border:1px solid var(--border);padding:20px 24px;display:flex;align-items:center;gap:16px;}
-.stat-icon{font-size:28px;}
-.stat-val{font-size:32px;font-weight:800;color:var(--accent);line-height:1;}
-.stat-label{font-size:12px;color:var(--muted);font-weight:600;letter-spacing:1px;text-transform:uppercase;margin-top:2px;}
-
+.stats{display:grid;grid-template-columns:repeat(3,1fr);gap:16px;margin-bottom:32px;}
+.sc{background:var(--s1);border:1px solid var(--bd);padding:20px 24px;display:flex;align-items:center;gap:16px;}
+.sv{font-size:32px;font-weight:800;color:var(--ac);line-height:1;}
+.sl{font-size:12px;color:var(--mu);font-weight:600;letter-spacing:1px;text-transform:uppercase;margin-top:2px;}
+/* SECTION HEADER */
+.sh{display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;}
+.st2{font-size:20px;font-weight:800;}
+.btn-add{background:var(--ac);border:none;color:#fff;padding:10px 22px;font-family:'Syne',sans-serif;font-size:14px;font-weight:700;cursor:pointer;display:flex;align-items:center;gap:8px;}
+.btn-add:hover{background:var(--ac2);}
+.btn-sec{background:var(--s2);border:1px solid var(--bd);color:var(--mu);padding:10px 22px;font-family:'Syne',sans-serif;font-size:14px;font-weight:700;cursor:pointer;}
+.btn-sec:hover{border-color:var(--ac);color:var(--ac);}
 /* TABLE */
-.section-header{display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;}
-.section-title{font-size:20px;font-weight:800;}
-.btn-add{background:var(--accent);border:none;color:#fff;padding:10px 22px;font-family:'Syne',sans-serif;font-size:14px;font-weight:700;cursor:pointer;display:flex;align-items:center;gap:8px;transition:background .2s;}
-.btn-add:hover{background:var(--accent2);}
-.table-wrap{background:var(--surface);border:1px solid var(--border);overflow-x:auto;}
+.tw{background:var(--s1);border:1px solid var(--bd);overflow-x:auto;}
 table{width:100%;border-collapse:collapse;}
-thead tr{background:var(--surface2);border-bottom:1px solid var(--border);}
-th{padding:12px 16px;text-align:left;font-size:11px;font-weight:700;letter-spacing:2px;color:var(--muted);text-transform:uppercase;}
-td{padding:14px 16px;border-bottom:1px solid var(--border);font-size:14px;}
+thead tr{background:var(--s2);border-bottom:1px solid var(--bd);}
+th{padding:12px 16px;text-align:left;font-size:11px;font-weight:700;letter-spacing:2px;color:var(--mu);text-transform:uppercase;}
+td{padding:13px 16px;border-bottom:1px solid var(--bd);font-size:13px;}
 tr:last-child td{border-bottom:none;}
-tr:hover td{background:rgba(255,79,0,0.03);}
-.mac-addr{font-family:'Space Mono',monospace;font-size:13px;color:var(--accent2);letter-spacing:1px;}
+tr:hover td{background:rgba(255,79,0,.02);}
+.mac{font-family:'Space Mono',monospace;font-size:12px;color:var(--ac2);}
 .badge{display:inline-block;padding:2px 8px;font-size:10px;font-weight:700;letter-spacing:1px;text-transform:uppercase;border-radius:2px;}
-.badge.m3u{background:rgba(59,130,246,0.15);color:var(--m3u);border:1px solid rgba(59,130,246,0.3);}
-.badge.xtream{background:rgba(168,85,247,0.15);color:var(--xtream);border:1px solid rgba(168,85,247,0.3);}
-.status{display:inline-block;padding:3px 10px;font-size:11px;font-weight:700;}
-.status.on{background:rgba(0,232,122,0.1);color:var(--green);}
-.status.off{background:rgba(255,51,85,0.1);color:var(--red);}
-.actions{display:flex;gap:8px;}
-.btn-icon{background:var(--surface2);border:1px solid var(--border);cursor:pointer;width:32px;height:32px;display:flex;align-items:center;justify-content:center;font-size:14px;transition:border-color .2s;}
-.btn-icon.edit:hover{border-color:var(--accent);}
-.btn-icon.del:hover{border-color:var(--red);}
-.empty-row{text-align:center;color:var(--muted);padding:40px;font-size:14px;}
-
-/* PROVIDER CODE */
-.code-box{background:var(--surface);border:1px solid var(--border);border-top:3px solid var(--accent);padding:32px;max-width:500px;}
-.code-display{font-family:'Space Mono',monospace;font-size:36px;font-weight:700;color:var(--accent);letter-spacing:8px;text-align:center;padding:20px;background:var(--surface2);border:1px solid var(--border);margin:20px 0;}
-.code-desc{font-size:13px;color:var(--muted);line-height:1.7;margin-bottom:16px;}
-
+.badge.m3{background:rgba(59,130,246,.15);color:var(--m3);border:1px solid rgba(59,130,246,.3);}
+.badge.xt{background:rgba(168,85,247,.15);color:var(--xt);border:1px solid rgba(168,85,247,.3);}
+.st{display:inline-block;padding:3px 10px;font-size:11px;font-weight:700;}
+.st.on{background:rgba(0,232,122,.1);color:var(--gn);}
+.st.off{background:rgba(255,51,85,.1);color:var(--red);}
+.acts{display:flex;gap:6px;}
+.bi{background:var(--s2);border:1px solid var(--bd);cursor:pointer;width:30px;height:30px;display:flex;align-items:center;justify-content:center;font-size:13px;}
+.bi.edit:hover{border-color:var(--ac);}
+.bi.del:hover{border-color:var(--red);}
+.copy-btn{background:none;border:none;cursor:pointer;font-size:13px;color:var(--ac);padding:0 4px;}
+.empty{text-align:center;color:var(--mu);padding:36px;font-size:14px;}
 /* MODAL */
-.modal-overlay{display:none;position:fixed;inset:0;background:rgba(0,0,0,0.8);z-index:200;align-items:center;justify-content:center;}
-.modal-box{background:var(--surface);border:1px solid var(--border);border-top:3px solid var(--accent);width:500px;max-width:95vw;max-height:90vh;overflow-y:auto;padding:32px;}
-.modal-header{display:flex;align-items:center;justify-content:space-between;margin-bottom:24px;}
-.modal-title{font-size:18px;font-weight:800;}
-.btn-close{background:none;border:none;color:var(--muted);font-size:20px;cursor:pointer;transition:color .2s;}
-.btn-close:hover{color:var(--red);}
-.type-selector{display:flex;gap:8px;margin-bottom:16px;}
-.type-btn{flex:1;background:var(--surface2);border:1px solid var(--border);color:var(--muted);padding:10px;font-family:'Syne',sans-serif;font-size:13px;font-weight:700;cursor:pointer;text-transform:uppercase;letter-spacing:1px;transition:all .2s;}
-.type-btn.selected,.type-btn:hover{border-color:var(--accent);color:var(--accent);}
-.modal-actions{display:flex;gap:10px;margin-top:24px;}
-.btn-cancel{flex:1;background:none;border:1px solid var(--border);color:var(--muted);padding:11px;font-family:'Syne',sans-serif;font-size:14px;font-weight:700;cursor:pointer;}
-.btn-cancel:hover{border-color:var(--muted);color:var(--text);}
-.btn-save{flex:2;background:var(--accent);border:none;color:#fff;padding:11px;font-family:'Syne',sans-serif;font-size:14px;font-weight:800;cursor:pointer;text-transform:uppercase;}
-.btn-save:hover{background:var(--accent2);}
-
+.mo{display:none;position:fixed;inset:0;background:rgba(0,0,0,.8);z-index:200;align-items:center;justify-content:center;}
+.mb{background:var(--s1);border:1px solid var(--bd);border-top:3px solid var(--ac);width:520px;max-width:95vw;max-height:90vh;overflow-y:auto;padding:32px;}
+.mh{display:flex;align-items:center;justify-content:space-between;margin-bottom:24px;}
+.mt{font-size:18px;font-weight:800;}
+.mc{background:none;border:none;color:var(--mu);font-size:20px;cursor:pointer;}
+.mc:hover{color:var(--red);}
+.tsw{display:flex;gap:8px;margin-bottom:16px;}
+.tb{flex:1;background:var(--s2);border:1px solid var(--bd);color:var(--mu);padding:10px;font-family:'Syne',sans-serif;font-size:13px;font-weight:700;cursor:pointer;text-transform:uppercase;letter-spacing:1px;}
+.tb.sel,.tb:hover{border-color:var(--ac);color:var(--ac);}
+.mas{display:flex;gap:10px;margin-top:24px;}
+.bcn{flex:1;background:none;border:1px solid var(--bd);color:var(--mu);padding:11px;font-family:'Syne',sans-serif;font-size:14px;font-weight:700;cursor:pointer;}
+.bsv{flex:2;background:var(--ac);border:none;color:#fff;padding:11px;font-family:'Syne',sans-serif;font-size:14px;font-weight:800;cursor:pointer;text-transform:uppercase;}
+.bsv:hover{background:var(--ac2);}
+.hint{font-size:11px;color:var(--mu);margin-top:6px;}
+.einfo{font-size:12px;margin-top:6px;font-weight:600;}
+/* PROVIDER CODE */
+.cbox{background:var(--s1);border:1px solid var(--bd);border-top:3px solid var(--ac);padding:32px;max-width:500px;}
+.cd{font-family:'Space Mono',monospace;font-size:36px;font-weight:700;color:var(--ac);letter-spacing:8px;text-align:center;padding:20px;background:var(--s2);border:1px solid var(--bd);margin:16px 0;}
+.prog{background:var(--s2);border:1px solid var(--bd);height:8px;border-radius:4px;overflow:hidden;margin-bottom:10px;}
+.progb{height:100%;width:0%;background:var(--ac);transition:width 1s linear,background 1s;border-radius:4px;}
 /* TOAST */
-.toast{position:fixed;bottom:24px;right:24px;background:var(--surface2);border:1px solid var(--border);border-left:3px solid var(--green);color:var(--text);padding:12px 20px;font-size:14px;z-index:999;opacity:0;pointer-events:none;transform:translateY(8px);transition:all .3s;max-width:320px;}
+.toast{position:fixed;bottom:24px;right:24px;background:var(--s2);border:1px solid var(--bd);border-left:3px solid var(--gn);color:var(--tx);padding:12px 20px;font-size:14px;z-index:999;opacity:0;pointer-events:none;transform:translateY(8px);transition:all .3s;max-width:320px;}
 .toast.show{opacity:1;transform:translateY(0);}
-.toast.error{border-left-color:var(--red);}
+.toast.err{border-left-color:var(--red);}
 </style>
 </head>
 <body>
 
 <!-- LOGIN -->
 <div id="loginScreen">
-  <div class="login-box">
-    <div class="login-logo">
-      <div class="logo-text">FENIX<span>TV</span></div>
-      <div class="logo-sub">PANEL DE CONTROL</div>
+  <div class="lbox">
+    <div class="llogo"><div class="lt">FENIX<span>TV</span></div><div class="ls">PANEL DE CONTROL</div></div>
+    <div class="tabs-a">
+      <button class="tab-a active" onclick="switchTab('login')">Iniciar Sesión</button>
+      <button class="tab-a" id="tabRegister" onclick="switchTab('reg')" style="display:none">Crear Admin</button>
     </div>
-    <div class="tabs-auth">
-      <button class="tab-btn active" onclick="switchTab('login')">Iniciar Sesión</button>
-      <button class="tab-btn" id="tabRegister" onclick="switchTab('register')" style="display:none">Crear Admin</button>
+    <div id="afLogin" class="af active">
+      <div class="fg"><label>Email</label><input type="email" id="loginEmail" placeholder="tu@email.com"></div>
+      <div class="fg"><label>Contraseña</label><input type="password" id="loginPass" placeholder="••••••••" onkeydown="if(event.key==='Enter')doLogin()"></div>
+      <button class="btn-p" onclick="doLogin()">Entrar →</button>
     </div>
-    <div id="formLogin" class="auth-form active">
-      <div class="form-group"><label>Email</label><input type="email" id="loginEmail" placeholder="tu@email.com"></div>
-      <div class="form-group"><label>Contraseña</label><input type="password" id="loginPass" placeholder="••••••••"></div>
-      <button class="btn-primary" onclick="doLogin()">Entrar →</button>
-    </div>
-    <div id="formRegister" class="auth-form">
-      <div class="note-box" id="registerNote" style="display:none">⚠️ Solo se puede crear <strong>un administrador</strong>. Después esta opción desaparecerá.</div>
-      <div class="form-group"><label>Email</label><input type="email" id="regEmail" placeholder="admin@email.com"></div>
-      <div class="form-group"><label>Contraseña</label><input type="password" id="regPass" placeholder="mínimo 6 caracteres"></div>
-      <div class="form-group"><label>Confirmar</label><input type="password" id="regPass2" placeholder="repetir contraseña"></div>
-      <button class="btn-primary" onclick="doRegister()">Crear cuenta Admin →</button>
+    <div id="afReg" class="af">
+      <div style="background:rgba(255,79,0,.08);border:1px solid rgba(255,79,0,.25);padding:10px 14px;font-size:12px;color:var(--ac2);margin-bottom:16px;">⚠️ Solo se puede crear <strong>un administrador</strong>. Después esta opción desaparecerá.</div>
+      <div class="fg"><label>Email</label><input type="email" id="regEmail" placeholder="admin@email.com"></div>
+      <div class="fg"><label>Contraseña</label><input type="password" id="regPass" placeholder="mínimo 6 caracteres"></div>
+      <div class="fg"><label>Confirmar contraseña</label><input type="password" id="regPass2"></div>
+      <button class="btn-p" onclick="doRegister()">Crear cuenta Admin →</button>
     </div>
   </div>
 </div>
@@ -611,154 +527,125 @@ tr:hover td{background:rgba(255,79,0,0.03);}
 <!-- APP -->
 <div id="appScreen">
   <nav class="topbar">
-    <div class="topbar-logo">FENIX<span>TV</span> <span style="font-size:13px;color:var(--muted);font-weight:400;">PANEL</span></div>
-    <div class="topbar-right">
-      <span id="userRole"></span>
-      <span id="userEmail"></span>
-      <button class="btn-logout" onclick="doLogout()">Cerrar sesión</button>
+    <div class="tlogo">FENIX<span>TV</span> <span style="font-size:13px;color:var(--mu);font-weight:400;">PANEL</span></div>
+    <div class="tright">
+      <span id="userRole"></span><span id="userEmail"></span>
+      <button class="btn-out" onclick="doLogout()">Cerrar sesión</button>
     </div>
   </nav>
-
-  <!-- NAV TABS -->
-  <div class="nav-tabs-bar">
-    <button class="nav-tab active" data-tab="tabMacs">📺 Dispositivos</button>
-    <button class="nav-tab admin-only" data-tab="tabPending">🔔 Pendientes</button>
-    <button class="nav-tab admin-only" data-tab="tabProvider">🔑 Código Proveedor</button>
-    <button class="nav-tab admin-only" data-tab="tabEmployees">👥 Empleados</button>
+  <div class="nav-bar">
+    <button class="nav-tab active" data-tab="tMacs">📺 Dispositivos</button>
+    <button class="nav-tab admin-only" data-tab="tPending">🔔 Pendientes</button>
+    <button class="nav-tab admin-only" data-tab="tProvider">🔑 Código Proveedor</button>
+    <button class="nav-tab admin-only" data-tab="tEmployees">👥 Empleados</button>
   </div>
 
-  <!-- TAB: MACs -->
-  <div id="tabMacs" class="tab-content default-tab">
-    <div class="stats-row">
-      <div class="stat-card"><div class="stat-icon">📺</div><div><div class="stat-val" id="statTotal">0</div><div class="stat-label">MACs registradas</div></div></div>
-      <div class="stat-card"><div class="stat-icon">✅</div><div><div class="stat-val" id="statActive">0</div><div class="stat-label">Con lista activa</div></div></div>
-      <div class="stat-card"><div class="stat-icon">🔥</div><div><div class="stat-val" style="color:var(--xtream)">FB</div><div class="stat-label">Firebase conectado</div></div></div>
+  <!-- TAB MACS -->
+  <div id="tMacs" class="tab-pane default">
+    <div class="stats">
+      <div class="sc"><div style="font-size:28px;">📺</div><div><div class="sv" id="statTotal">0</div><div class="sl">MACs registradas</div></div></div>
+      <div class="sc"><div style="font-size:28px;">✅</div><div><div class="sv" id="statActive">0</div><div class="sl">Con lista activa</div></div></div>
+      <div class="sc"><div style="font-size:28px;">🔥</div><div><div class="sv" style="color:var(--xt)">FB</div><div class="sl">Firebase conectado</div></div></div>
     </div>
-    <div class="section-header">
-      <div class="section-title">Dispositivos registrados</div>
-      <button class="btn-add" onclick="openAddMAC()">+ Agregar MAC</button>
-    </div>
-    <div class="table-wrap">
-      <table>
-        <thead><tr><th>MAC</th><th>Nombre</th><th>Lista</th><th>Estado</th><th>Acciones</th></tr></thead>
-        <tbody id="macTableBody"><tr><td colspan="5" class="empty-row">Cargando...</td></tr></tbody>
-      </table>
-    </div>
+    <div class="sh"><div class="st2">Dispositivos registrados</div><button class="btn-add" onclick="openAddMAC()">+ Agregar</button></div>
+    <div class="tw"><table>
+      <thead><tr><th>ID/MAC</th><th>Nombre</th><th>Lista</th><th>Vence</th><th>Estado</th><th>Acción</th></tr></thead>
+      <tbody id="macTableBody"><tr><td colspan="6" class="empty">Cargando...</td></tr></tbody>
+    </table></div>
   </div>
 
-  <!-- TAB: Pendientes -->
-  <div id="tabPending" class="tab-content admin-only">
-    <div class="section-header">
-      <div class="section-title">🔔 Dispositivos esperando lista</div>
-      <button class="btn-add" onclick="loadPending()" style="background:var(--surface2);border:1px solid var(--border);color:var(--muted);">🔄 Actualizar</button>
-    </div>
-    <p style="font-size:13px;color:var(--muted);margin-bottom:20px;">Estos dispositivos abrieron la app pero aún no tienen lista asignada. Copia su ID y agrégalo en la pestaña Dispositivos.</p>
-    <div class="table-wrap">
-      <table>
-        <thead><tr><th>ID Dispositivo</th><th>MAC Real</th><th>Última vez visto</th><th>Acción</th></tr></thead>
-        <tbody id="pendingTableBody"><tr><td colspan="4" class="empty-row">Cargando...</td></tr></tbody>
-      </table>
-    </div>
+  <!-- TAB PENDIENTES -->
+  <div id="tPending" class="tab-pane admin-only">
+    <div class="sh"><div class="st2">🔔 Dispositivos esperando lista</div><button class="btn-sec" onclick="loadPending()">🔄 Actualizar</button></div>
+    <p style="font-size:13px;color:var(--mu);margin-bottom:20px;">Abrieron la app pero aún no tienen lista. Clic en ➕ para asignarles una.</p>
+    <div class="tw"><table>
+      <thead><tr><th>ID Dispositivo</th><th>MAC</th><th>Último acceso</th><th>Acción</th></tr></thead>
+      <tbody id="pendingBody"><tr><td colspan="4" class="empty">Cargando...</td></tr></tbody>
+    </table></div>
   </div>
 
-  <!-- TAB: Código Proveedor -->
-  <div id="tabProvider" class="tab-content admin-only">
-    <div class="code-box">
-      <div class="section-title" style="margin-bottom:16px;">🔑 Código de Acceso para Proveedores</div>
-      <p class="code-desc">Este código protege la sección <strong>LIST USERS</strong> en la app. Solo quien tenga este código puede entrar a esa sección. Genéralo y compártelo solo con tus proveedores de confianza.</p>
-      <div class="code-display" id="providerCodeDisplay">—</div>
-      <div style="margin:0 0 16px;background:var(--surface2);border:1px solid var(--border);height:8px;border-radius:4px;overflow:hidden;">
-        <div id="providerTimerBar" style="height:100%;width:0%;background:var(--accent);transition:width 1s linear,background 1s;border-radius:4px;"></div>
-      </div>
-      <p id="providerTimerText" style="font-size:13px;color:var(--muted);text-align:center;margin-bottom:16px;">Sin código activo</p>
-      <button class="btn-add" onclick="generateProviderCode()" style="width:100%;justify-content:center;">🔄 Generar nuevo código (2 min)</button>
-      <p style="font-size:11px;color:var(--muted);margin-top:12px;text-align:center;">El código expira automáticamente a los 2 minutos. Al generar uno nuevo, el anterior deja de funcionar.</p>
+  <!-- TAB CÓDIGO PROVEEDOR -->
+  <div id="tProvider" class="tab-pane admin-only">
+    <div class="cbox">
+      <div class="st2" style="margin-bottom:12px;">🔑 Código de Acceso para Proveedores</div>
+      <p style="font-size:13px;color:var(--mu);margin-bottom:16px;line-height:1.7;">Protege la sección <strong>LIST USERS</strong> en la app. El código expira automáticamente a los <strong>2 minutos</strong>.</p>
+      <div class="cd" id="codeDisplay">—</div>
+      <div class="prog"><div class="progb" id="codeBar"></div></div>
+      <p id="codeTimer" style="font-size:13px;color:var(--mu);text-align:center;margin-bottom:16px;">Sin código activo</p>
+      <button class="btn-add" onclick="generateCode()" style="width:100%;justify-content:center;">🔄 Generar nuevo código (2 min)</button>
+      <p style="font-size:11px;color:var(--mu);margin-top:10px;text-align:center;">Al generar uno nuevo, el anterior expira inmediatamente.</p>
     </div>
   </div>
 
-  <!-- TAB: Empleados -->
-  <div id="tabEmployees" class="tab-content admin-only">
-    <div class="section-header">
-      <div class="section-title">👥 Cuentas de Empleados</div>
-      <button class="btn-add" onclick="openAddEmployee()">+ Agregar Empleado</button>
-    </div>
-    <p style="font-size:13px;color:var(--muted);margin-bottom:20px;">Los empleados solo pueden agregar y editar listas. No pueden eliminar MACs ni ver el código de proveedor.</p>
-    <div class="table-wrap">
-      <table>
-        <thead><tr><th>Email</th><th>Rol</th><th>Acción</th></tr></thead>
-        <tbody id="empTableBody"><tr><td colspan="3" class="empty-row">Cargando...</td></tr></tbody>
-      </table>
-    </div>
+  <!-- TAB EMPLEADOS -->
+  <div id="tEmployees" class="tab-pane admin-only">
+    <div class="sh"><div class="st2">👥 Cuentas de Empleados</div><button class="btn-add" onclick="openAddEmp()">+ Agregar empleado</button></div>
+    <p style="font-size:13px;color:var(--mu);margin-bottom:20px;">Los empleados pueden agregar y editar listas. No pueden eliminar MACs ni ver el código de proveedor.</p>
+    <div class="tw"><table>
+      <thead><tr><th>Email</th><th>Rol</th><th>Acción</th></tr></thead>
+      <tbody id="empBody"><tr><td colspan="3" class="empty">Cargando...</td></tr></tbody>
+    </table></div>
   </div>
 </div>
 
 <!-- MODAL MAC -->
-<div class="modal-overlay" id="macModal">
-  <div class="modal-box">
-    <div class="modal-header">
-      <div class="modal-title" id="modalTitle">Agregar MAC</div>
-      <button class="btn-close" onclick="closeModal()">✕</button>
-    </div>
+<div class="mo" id="macModal">
+  <div class="mb">
+    <div class="mh"><div class="mt" id="modalTitle">Agregar dispositivo</div><button class="mc" onclick="closeModal()">✕</button></div>
     <input type="hidden" id="editKey">
-    <div class="form-group"><label>ID Dispositivo (de pestaña Pendientes) o MAC</label><input type="text" id="fMac" placeholder="ABC123456789 o AA:BB:CC:DD:EE:FF" style="font-family:'Space Mono',monospace;"></div>
-    <div class="form-group"><label>Nombre del dispositivo</label><input type="text" id="fName" placeholder="ej. Smart TV Sala"></div>
-    <div class="form-group">
+    <div class="fg"><label>ID de dispositivo o MAC</label><input type="text" id="fMac" placeholder="ID de pestaña Pendientes o AA:BB:CC" style="font-family:'Space Mono',monospace;"></div>
+    <div class="fg"><label>Nombre</label><input type="text" id="fName" placeholder="ej. TV Sala"></div>
+    <div class="fg">
       <label>Tipo de lista</label>
-      <div class="type-selector">
-        <button class="type-btn selected" id="btnM3U" onclick="selectType('m3u')">📋 M3U / URL</button>
-        <button class="type-btn" id="btnXtream" onclick="selectType('xtream')">⚡ Xtream Codes</button>
+      <div class="tsw">
+        <button class="tb sel" id="btnM3U" onclick="selectType('m3u')">📋 M3U</button>
+        <button class="tb" id="btnXt" onclick="selectType('xtream')">⚡ Xtream</button>
       </div>
-      <select id="fListType" style="display:none" onchange="toggleListFields()"><option value="m3u">M3U</option><option value="xtream">Xtream Codes</option></select>
+      <select id="fListType" style="display:none" onchange="toggleFields()"><option value="m3u">M3U</option><option value="xtream">Xtream</option></select>
     </div>
-    <div id="m3uFields"><div class="form-group"><label>URL M3U</label><input type="url" id="fUrl" placeholder="http://ejemplo.com/lista.m3u"></div></div>
-    <div id="xtreamFields" style="display:none">
-      <div class="form-group"><label>Servidor Xtream</label><input type="url" id="fXServer" placeholder="http://servidor.com:8080"></div>
-      <div class="form-group"><label>Usuario</label><input type="text" id="fXUser" placeholder="usuario"></div>
-      <div class="form-group"><label>Contraseña</label><input type="password" id="fXPass" placeholder="contraseña"></div>
+    <div id="m3uF">
+      <div class="fg">
+        <label>URL M3U</label>
+        <input type="url" id="fUrl" placeholder="http://servidor/lista.m3u" onblur="detectExpiry()">
+        <p class="hint">Se detectará la expiración automáticamente al pegar la URL</p>
+        <p class="einfo" id="expiryInfo"></p>
+      </div>
     </div>
-    <div class="modal-actions">
-      <button class="btn-cancel" onclick="closeModal()">Cancelar</button>
-      <button class="btn-save" onclick="saveMAC()">💾 Guardar</button>
+    <div id="xtF" style="display:none">
+      <div class="fg"><label>Servidor</label><input type="url" id="fXServer" placeholder="http://servidor:8080" onblur="detectXtreamExpiry()"></div>
+      <div class="fg"><label>Usuario</label><input type="text" id="fXUser" onblur="detectXtreamExpiry()"></div>
+      <div class="fg"><label>Contraseña</label><input type="password" id="fXPass" onblur="detectXtreamExpiry()"></div>
+      <p class="einfo" id="xExpiryInfo"></p>
     </div>
+    <div class="fg"><label>Fecha de vencimiento</label><input type="date" id="fExpiry"><p class="hint">Se detecta automáticamente con Xtream. También puedes editarla manualmente.</p></div>
+    <div class="mas"><button class="bcn" onclick="closeModal()">Cancelar</button><button class="bsv" onclick="saveMAC()">💾 Guardar</button></div>
   </div>
 </div>
 
 <!-- MODAL EMPLEADO -->
-<div class="modal-overlay" id="empModal">
-  <div class="modal-box" style="max-width:400px;">
-    <div class="modal-header">
-      <div class="modal-title">Agregar Empleado</div>
-      <button class="btn-close" onclick="closeEmpModal()">✕</button>
-    </div>
-    <p style="font-size:13px;color:var(--muted);margin-bottom:20px;">El empleado podrá iniciar sesión en el panel y agregar/editar listas. No tendrá acceso a eliminar MACs ni ver el código de proveedor.</p>
-    <div class="form-group"><label>Email del empleado</label><input type="email" id="empEmail" placeholder="empleado@email.com"></div>
-    <div class="form-group"><label>Contraseña temporal</label><input type="password" id="empPass" placeholder="mínimo 6 caracteres"></div>
-    <div class="modal-actions">
-      <button class="btn-cancel" onclick="closeEmpModal()">Cancelar</button>
-      <button class="btn-save" onclick="saveEmployee()">Crear empleado</button>
-    </div>
+<div class="mo" id="empModal">
+  <div class="mb" style="max-width:400px;">
+    <div class="mh"><div class="mt">Agregar Empleado</div><button class="mc" onclick="closeEmpModal()">✕</button></div>
+    <p style="font-size:13px;color:var(--mu);margin-bottom:20px;">El empleado puede agregar/editar listas. No puede eliminar MACs ni ver el código de proveedor.</p>
+    <div class="fg"><label>Email del empleado</label><input type="email" id="empEmail" placeholder="empleado@email.com"></div>
+    <div class="fg"><label>Contraseña temporal</label><input type="password" id="empPass" placeholder="mínimo 6 caracteres"></div>
+    <div class="mas"><button class="bcn" onclick="closeEmpModal()">Cancelar</button><button class="bsv" onclick="saveEmployee()">Crear empleado</button></div>
   </div>
 </div>
 
 <div class="toast" id="toast"></div>
 
 <script>
-function switchTab(tab) {
-  document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
-  document.querySelectorAll('.auth-form').forEach(f => { f.style.display='none'; f.classList.remove('active'); });
-  if (tab === 'login') {
-    document.querySelector('.tab-btn').classList.add('active');
-    document.getElementById('formLogin').style.display = 'block';
+function switchTab(t){
+  document.querySelectorAll('.tab-a').forEach(b=>b.classList.remove('active'));
+  document.querySelectorAll('.af').forEach(f=>{f.style.display='none';f.classList.remove('active');});
+  if(t==='login'){
+    document.querySelector('.tab-a').classList.add('active');
+    document.getElementById('afLogin').style.display='block';
   } else {
     document.getElementById('tabRegister').classList.add('active');
-    document.getElementById('formRegister').style.display = 'block';
+    document.getElementById('afReg').style.display='block';
   }
-}
-function selectType(t) {
-  document.getElementById('fListType').value = t;
-  document.getElementById('btnM3U').classList.toggle('selected', t==='m3u');
-  document.getElementById('btnXtream').classList.toggle('selected', t==='xtream');
-  toggleListFields();
 }
 </script>
 </body>
