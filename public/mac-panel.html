@@ -138,6 +138,51 @@
     await signOut(auth);
   };
 
+  window.loadPending = async function() {
+    const snap = await get(ref(db, 'pending_macs'));
+    const data = snap.val() || {};
+    const tbody = $('pendingTableBody');
+    if (!tbody) return;
+    const entries = Object.entries(data);
+    if (entries.length === 0) {
+      tbody.innerHTML = '<tr><td colspan="4" class="empty-row">No hay dispositivos pendientes</td></tr>';
+      return;
+    }
+    tbody.innerHTML = '';
+    entries.sort((a,b) => (b[1].ts||0) - (a[1].ts||0)).forEach(([key, val]) => {
+      const ago = val.ts ? Math.floor((Date.now()-val.ts)/1000) : '?';
+      const agoStr = ago < 60 ? ago+'s' : ago < 3600 ? Math.floor(ago/60)+'m' : Math.floor(ago/3600)+'h';
+      const tr = document.createElement('tr');
+      tr.innerHTML = `
+        <td><span class="mac-addr" style="font-size:12px;">${val.deviceId||key}</span>
+            <button onclick="copyToClipboard('${val.deviceId||key}')" style="background:none;border:none;cursor:pointer;color:var(--accent);font-size:12px;margin-left:6px;">📋</button></td>
+        <td><span style="font-family:monospace;font-size:12px;color:var(--muted);">${val.mac||'—'}</span></td>
+        <td style="color:var(--muted);font-size:13px;">${agoStr} atrás</td>
+        <td>
+          <button class="btn-icon edit" onclick="quickAdd('${val.deviceId||key}','${val.mac||''}')" title="Agregar lista a este dispositivo">➕</button>
+          <button class="btn-icon del" onclick="deletePending('${key}')">🗑️</button>
+        </td>`;
+      tbody.appendChild(tr);
+    });
+  };
+
+  window.copyToClipboard = function(text) {
+    navigator.clipboard.writeText(text).then(() => showToast('Copiado: ' + text));
+  };
+
+  window.quickAdd = function(deviceId, mac) {
+    openAddMAC();
+    setTimeout(() => {
+      $('fMac').value = deviceId;
+      $('fName').value = 'Dispositivo ' + deviceId.substr(0,6);
+    }, 100);
+  };
+
+  window.deletePending = async function(key) {
+    await remove(ref(db, 'pending_macs/' + key));
+    loadPending();
+  };
+
   // ── MACs ─────────────────────────────────────────────────
   function loadMACs() {
     const uid = $('appScreen').dataset.uid = window._user.uid;
@@ -419,6 +464,7 @@
         document.getElementById(target).style.display = 'block';
         if (target === 'tabProvider') loadProviderCode();
         if (target === 'tabEmployees') loadEmployees();
+        if (target === 'tabPending') loadPending();
       });
     });
   });
@@ -576,6 +622,7 @@ tr:hover td{background:rgba(255,79,0,0.03);}
   <!-- NAV TABS -->
   <div class="nav-tabs-bar">
     <button class="nav-tab active" data-tab="tabMacs">📺 Dispositivos</button>
+    <button class="nav-tab admin-only" data-tab="tabPending">🔔 Pendientes</button>
     <button class="nav-tab admin-only" data-tab="tabProvider">🔑 Código Proveedor</button>
     <button class="nav-tab admin-only" data-tab="tabEmployees">👥 Empleados</button>
   </div>
@@ -595,6 +642,21 @@ tr:hover td{background:rgba(255,79,0,0.03);}
       <table>
         <thead><tr><th>MAC</th><th>Nombre</th><th>Lista</th><th>Estado</th><th>Acciones</th></tr></thead>
         <tbody id="macTableBody"><tr><td colspan="5" class="empty-row">Cargando...</td></tr></tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- TAB: Pendientes -->
+  <div id="tabPending" class="tab-content admin-only">
+    <div class="section-header">
+      <div class="section-title">🔔 Dispositivos esperando lista</div>
+      <button class="btn-add" onclick="loadPending()" style="background:var(--surface2);border:1px solid var(--border);color:var(--muted);">🔄 Actualizar</button>
+    </div>
+    <p style="font-size:13px;color:var(--muted);margin-bottom:20px;">Estos dispositivos abrieron la app pero aún no tienen lista asignada. Copia su ID y agrégalo en la pestaña Dispositivos.</p>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>ID Dispositivo</th><th>MAC Real</th><th>Última vez visto</th><th>Acción</th></tr></thead>
+        <tbody id="pendingTableBody"><tr><td colspan="4" class="empty-row">Cargando...</td></tr></tbody>
       </table>
     </div>
   </div>
@@ -638,7 +700,7 @@ tr:hover td{background:rgba(255,79,0,0.03);}
       <button class="btn-close" onclick="closeModal()">✕</button>
     </div>
     <input type="hidden" id="editKey">
-    <div class="form-group"><label>Dirección MAC</label><input type="text" id="fMac" placeholder="AA:BB:CC:DD:EE:FF" style="font-family:'Space Mono',monospace;"></div>
+    <div class="form-group"><label>ID Dispositivo (de pestaña Pendientes) o MAC</label><input type="text" id="fMac" placeholder="ABC123456789 o AA:BB:CC:DD:EE:FF" style="font-family:'Space Mono',monospace;"></div>
     <div class="form-group"><label>Nombre del dispositivo</label><input type="text" id="fName" placeholder="ej. Smart TV Sala"></div>
     <div class="form-group">
       <label>Tipo de lista</label>
