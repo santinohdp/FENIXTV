@@ -3,11 +3,11 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Fenix TV — Panel</title>
+<title>IPTV Panel</title>
 <script type="module">
 import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
 import { getAuth, createUserWithEmailAndPassword, signInWithEmailAndPassword, onAuthStateChanged, signOut } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js";
-import { getDatabase, ref, set, get, update, remove, onValue } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-database.js";
+import { getDatabase, ref, set, get, remove, onValue } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-database.js";
 
 const firebaseConfig = {
   apiKey:"AIzaSyAmJtRakmbWFeNA7o9ii-Wj2ESbnZLGFcE",
@@ -22,37 +22,24 @@ const fbApp = initializeApp(firebaseConfig);
 const auth  = getAuth(fbApp);
 const db    = getDatabase(fbApp);
 
+const BASE = 'https://streamflix-production-9559.up.railway.app';
+
 function $i(id){ return document.getElementById(id); }
-function showToast(msg,type='success'){
-  const t=$i('toast');t.textContent=msg;
-  t.className='toast show '+(type==='error'?'err':'ok');
+function toast(msg, err=false){
+  const t=$i('toast'); t.textContent=msg;
+  t.className='toast show'+(err?' err':'');
   setTimeout(()=>t.className='toast',3500);
 }
 
 // ── Auth ──────────────────────────────────────────────────
 onAuthStateChanged(auth, async user => {
   if(user){
-    window._user = user;
-    let role = 'admin';
-    try {
-      const rs = await get(ref(db,`roles/${user.uid}`));
-      role = rs.val() || 'admin';
-      if(!rs.val()){
-        await set(ref(db,`roles/${user.uid}`),'admin');
-        await set(ref(db,'admin_created'),true);
-        await set(ref(db,'admin_uid'),user.uid);
-      }
-    } catch(e){ role='admin'; }
-    window._role = role;
     $i('loginScreen').style.display='none';
     $i('appScreen').style.display='flex';
     $i('userEmail').textContent=user.email;
-    $i('userRole').textContent=role==='admin'?'👑 Admin':'👤 Empleado';
-    document.querySelectorAll('.admin-only').forEach(el=>el.style.display=role==='admin'?'':'none');
-    loadMACs();
-    if(role==='admin') loadPending();
+    loadUsers();
+    checkAdminExists();
   } else {
-    window._user=null;
     $i('loginScreen').style.display='flex';
     $i('appScreen').style.display='none';
     checkAdminExists();
@@ -63,360 +50,238 @@ async function checkAdminExists(){
   try {
     const s = await get(ref(db,'admin_created'));
     const exists = s.val();
-    $i('tabRegister').style.display = exists?'none':'';
-    if(!exists) switchTab('register');
-  } catch(e){ $i('tabRegister').style.display='none'; }
+    $i('tabReg').style.display = exists?'none':'';
+    if(!exists) switchTab('reg');
+    else switchTab('login');
+  } catch(e){}
 }
 
 window.doLogin = async function(){
-  const email=$i('loginEmail').value.trim(), pass=$i('loginPass').value;
-  if(!email||!pass) return showToast('Completa los campos','error');
+  const email=$i('lEmail').value.trim(), pass=$i('lPass').value;
+  if(!email||!pass) return toast('Completa los campos',true);
   try {
-    const cred = await signInWithEmailAndPassword(auth,email,pass);
-    const rs = await get(ref(db,`roles/${cred.user.uid}`));
-    if(!rs.val()){
-      await set(ref(db,`roles/${cred.user.uid}`),'admin');
-      await set(ref(db,'admin_created'),true);
-      await set(ref(db,'admin_uid'),cred.user.uid);
-    }
-  } catch(e){ showToast('Credenciales incorrectas','error'); }
+    await signInWithEmailAndPassword(auth,email,pass);
+  } catch(e){ toast('Credenciales incorrectas',true); }
 };
 
 window.doRegister = async function(){
-  const email=$i('regEmail').value.trim(),pass=$i('regPass').value,pass2=$i('regPass2').value;
-  if(!email||!pass) return showToast('Completa los campos','error');
-  if(pass!==pass2) return showToast('Las contraseñas no coinciden','error');
-  if(pass.length<6) return showToast('Mínimo 6 caracteres','error');
+  const email=$i('rEmail').value.trim(), pass=$i('rPass').value, pass2=$i('rPass2').value;
+  if(!email||!pass) return toast('Completa los campos',true);
+  if(pass!==pass2) return toast('Las contraseñas no coinciden',true);
+  if(pass.length<6) return toast('Mínimo 6 caracteres',true);
   const s=await get(ref(db,'admin_created'));
-  if(s.val()) return showToast('Ya existe un administrador','error');
+  if(s.val()) return toast('Ya existe un admin',true);
   try {
     const cred=await createUserWithEmailAndPassword(auth,email,pass);
-    await set(ref(db,`roles/${cred.user.uid}`),'admin');
     await set(ref(db,'admin_created'),true);
     await set(ref(db,'admin_uid'),cred.user.uid);
-    showToast('Cuenta admin creada');
-  } catch(e){ showToast('Error: '+e.message,'error'); }
+    toast('Admin creado');
+  } catch(e){ toast('Error: '+e.message,true); }
 };
 
 window.doLogout = async()=>{ await signOut(auth); };
 
-// ── MACs ──────────────────────────────────────────────────
-function loadMACs(){
-  onValue(ref(db,'mac_index'), snap=>{
-    const data=snap.val()||{};
-    renderMACs(data);
+// ── Usuarios IPTV ─────────────────────────────────────────
+let _usersData = {};
+
+function loadUsers(){
+  const usersRef = ref(db,'iptv_users');
+  onValue(usersRef, snap => {
+    _usersData = snap.val() || {};
+    renderUsers(_usersData);
   });
 }
 
-function renderMACs(data){
-  const tbody=$i('macTableBody');
+function renderUsers(data){
+  const tbody = $i('tBody');
+  const keys = Object.keys(data);
+  $i('statTotal').textContent = keys.length;
+  $i('statActive').textContent = keys.filter(k=>data[k].active && (!data[k].expiry||data[k].expiry>Date.now())).length;
+
+  if(keys.length===0){
+    tbody.innerHTML='<tr><td colspan="6" class="empty">No hay usuarios. Clic en + Agregar.</td></tr>';
+    return;
+  }
   tbody.innerHTML='';
-  const keys=Object.keys(data);
-  $i('statTotal').textContent=keys.length;
-  $i('statActive').textContent=keys.filter(k=>data[k].url).length;
-  if(keys.length===0){tbody.innerHTML='<tr><td colspan="6" class="empty">No hay dispositivos registrados</td></tr>';return;}
-  keys.forEach(key=>{
-    const m=data[key];
-    const lbl = m.listType==='xtream'
-      ? `<span class="badge xt">Xtream</span> ${m.xtreamServer||''}`
-      : `<span class="badge m3">M3U</span> ${(m.url||'').substring(0,35)}...`;
-    // Expiry badge
-    let expBadge='';
-    if(m.expiry){
-      const d=new Date(m.expiry);
-      const days=Math.floor((d-Date.now())/86400000);
-      const color=days<7?'var(--red)':days<30?'#ffaa00':'var(--green)';
-      expBadge=`<span style="color:${color};font-size:11px;font-weight:700;">${days<0?'EXPIRADA':days+'d'}</span>`;
+  keys.forEach(username=>{
+    const u = data[username];
+    const isActive = u.active && (!u.expiry||u.expiry>Date.now());
+    let expBadge='—';
+    if(u.expiry){
+      const days=Math.floor((u.expiry-Date.now())/86400000);
+      const color=days<0?'var(--red)':days<7?'#ffaa00':'var(--gn)';
+      expBadge=`<span style="color:${color};font-weight:700;font-size:11px;">${days<0?'EXPIRADO':days+'d'}</span>`;
     }
-    const tr=document.createElement('tr');
+    const typeBadge = u.listType==='xtream'
+      ? `<span class="badge xt">Xtream</span>`
+      : `<span class="badge m3">M3U</span>`;
+    const tr = document.createElement('tr');
     tr.innerHTML=`
-      <td><span class="mac">${m.mac||key}</span></td>
-      <td>${m.name||'—'}</td>
-      <td>${lbl}</td>
-      <td>${expBadge||'—'}</td>
-      <td><span class="st ${m.url?'on':'off'}">${m.url?'Activa':'Sin lista'}</span></td>
+      <td><span class="mono">${username}</span></td>
+      <td><span class="mono pwd">${u.password}</span></td>
+      <td>${typeBadge}</td>
+      <td>${expBadge}</td>
+      <td><span class="st ${isActive?'on':'off'}">${isActive?'Activo':'Inactivo'}</span></td>
       <td class="acts">
-        <button class="bi edit" onclick="openEdit('${key}')">✏️</button>
-        <button class="bi del admin-only" onclick="deleteMAC('${key}')">🗑️</button>
+        <button class="bi" onclick="copyLogin('${username}','${u.password}')" title="Copiar datos de login">📋</button>
+        <button class="bi edit" onclick="openEdit('${username}')">✏️</button>
+        <button class="bi del" onclick="deleteUser('${username}')">🗑️</button>
       </td>`;
     tbody.appendChild(tr);
   });
 }
 
-window.deleteMAC = async function(key){
-  if(window._role!=='admin') return showToast('Sin permisos','error');
-  if(!confirm('¿Eliminar?')) return;
-  const uid=(await get(ref(db,'admin_uid'))).val();
-  await remove(ref(db,`users/${uid}/macs/${key}`));
-  await remove(ref(db,`mac_index/${key}`));
-  showToast('MAC eliminada');
+window.copyLogin = function(user, pass){
+  const SERVER = BASE;
+  const txt = `Servidor: ${SERVER}\nUsuario: ${user}\nContraseña: ${pass}`;
+  navigator.clipboard.writeText(txt).then(()=>toast('Datos copiados al portapapeles'));
 };
 
-window.openAddMAC=function(){
-  $i('modalTitle').textContent='Agregar dispositivo';
-  $i('editKey').value='';
-  $i('fMac').value='';$i('fName').value='';
-  $i('fListType').value='m3u';toggleFields();
-  $i('fUrl').value='';$i('fXServer').value='';$i('fXUser').value='';$i('fXPass').value='';
-  $i('fExpiry').value='';$i('expiryInfo').textContent='';
-  $i('macModal').style.display='flex';
+window.deleteUser = async function(username){
+  if(!confirm(`¿Eliminar usuario "${username}"?`)) return;
+  await fetch(`${BASE}/api/users/${username}`, { method: 'DELETE' });
+  toast('Usuario eliminado');
 };
 
-window.openEdit=async function(key){
-  const s=await get(ref(db,`mac_index/${key}`));
-  const m=s.val();if(!m)return;
-  $i('modalTitle').textContent='Editar dispositivo';
-  $i('editKey').value=key;$i('fMac').value=m.mac||'';$i('fName').value=m.name||'';
-  $i('fListType').value=m.listType||'m3u';toggleFields();
-  $i('fUrl').value=m.url||'';$i('fXServer').value=m.xtreamServer||'';
-  $i('fXUser').value=m.xtreamUser||'';$i('fXPass').value=m.xtreamPass||'';
-  if(m.expiry){$i('fExpiry').value=new Date(m.expiry).toISOString().split('T')[0];}
-  $i('expiryInfo').textContent='';
-  $i('macModal').style.display='flex';
+// ── Modal ─────────────────────────────────────────────────
+window.openAdd = function(){
+  $i('mTitle').textContent = 'Agregar usuario';
+  $i('mUsername').value=''; $i('mUsername').disabled=false;
+  $i('mPass').value=genPass();
+  $i('mName').value='';
+  $i('mListType').value='m3u'; toggleFields();
+  $i('mUrl').value=''; $i('mXSrv').value=''; $i('mXUser').value=''; $i('mXPass').value='';
+  $i('mExpiry').value=''; $i('xpInfo').textContent='';
+  $i('modal').style.display='flex';
 };
 
-window.closeModal=()=>$i('macModal').style.display='none';
-window.toggleFields=function(){
-  const t=$i('fListType').value;
-  $i('m3uF').style.display=t==='m3u'?'block':'none';
-  $i('xtF').style.display=t==='xtream'?'block':'none';
+window.openEdit = function(username){
+  const u = _usersData[username];
+  if(!u) return;
+  $i('mTitle').textContent = 'Editar usuario';
+  $i('mUsername').value=username; $i('mUsername').disabled=true;
+  $i('mPass').value=u.password||'';
+  $i('mName').value=u.name||'';
+  $i('mListType').value=u.listType||'m3u'; toggleFields();
+  $i('mUrl').value=u.url||''; $i('mXSrv').value=u.xtreamServer||'';
+  $i('mXUser').value=u.xtreamUser||''; $i('mXPass').value=u.xtreamPass||'';
+  if(u.expiry) $i('mExpiry').value=new Date(u.expiry).toISOString().split('T')[0];
+  else $i('mExpiry').value='';
+  $i('xpInfo').textContent='';
+  $i('modal').style.display='flex';
 };
-window.selectType=function(t){
-  $i('fListType').value=t;
+
+window.closeModal = ()=> $i('modal').style.display='none';
+
+window.toggleFields = function(){
+  const t=$i('mListType').value;
+  $i('fM3U').style.display=t==='m3u'?'block':'none';
+  $i('fXt').style.display=t==='xtream'?'block':'none';
+};
+
+window.selectType = function(t){
+  $i('mListType').value=t;
   $i('btnM3U').classList.toggle('sel',t==='m3u');
   $i('btnXt').classList.toggle('sel',t==='xtream');
   toggleFields();
 };
 
-// Check M3U expiry from URL
-async function fetchXtreamInfo(server, user, pass) {
-  // Try multiple methods to bypass CORS
-  const apiUrl = `${server}/player_api.php?username=${user}&password=${pass}`;
-  // Method 1: direct fetch with no-cors (won't give body but worth trying)
-  try {
-    const resp = await fetch(apiUrl, {
-      method: 'GET',
-      headers: { 'Accept': 'application/json' }
-    });
-    if (resp.ok) {
-      const data = await resp.json();
-      if (data && data.user_info) return data.user_info;
-    }
-  } catch(e) {}
-  // Method 2: via Railway proxy if available
-  try {
-    const proxyUrl = 'https://streamflix-production-9559.up.railway.app/proxy?url=' + encodeURIComponent(apiUrl);
-    const resp2 = await fetch(proxyUrl);
-    if (resp2.ok) {
-      const data2 = await resp2.json();
-      if (data2 && data2.user_info) return data2.user_info;
-    }
-  } catch(e) {}
-  return null;
+function genPass(){
+  const chars='ABCDEFGHJKLMNPQRSTUVWXYZabcdefghjkmnpqrstuvwxyz23456789';
+  let p=''; for(let i=0;i<10;i++) p+=chars[Math.floor(Math.random()*chars.length)];
+  return p;
 }
+window.genPass=function(){ $i('mPass').value=genPass(); };
 
-function showExpiry(info, displayEl, inputEl) {
-  if (!info) { displayEl.textContent = 'No se pudo detectar — ingresa la fecha manualmente'; displayEl.style.color='#888'; return; }
-  if (info.exp_date) {
-    const exp = new Date(parseInt(info.exp_date) * 1000);
-    const days = Math.floor((exp - Date.now()) / 86400000);
-    if (inputEl) inputEl.value = exp.toISOString().split('T')[0];
-    displayEl.textContent = `✅ Expira: ${exp.toLocaleDateString('es')} (${days < 0 ? 'EXPIRADA' : days + ' días'})`;
-    displayEl.style.color = days < 0 ? '#ff3355' : days < 7 ? '#ff3355' : days < 30 ? '#ffaa00' : '#00e87a';
-  } else if (info.status === 'Expired') {
-    displayEl.textContent = '❌ Cuenta EXPIRADA'; displayEl.style.color = '#ff3355';
+window.detectExpiry = async function(){
+  const url = $i('mUrl').value.trim();
+  if(!url) return;
+  const el=$i('xpInfo');
+  el.textContent='Detectando...'; el.style.color='#888';
+  try {
+    const u=new URL(url);
+    const user=u.searchParams.get('username'), pass=u.searchParams.get('password');
+    if(user&&pass){
+      const api=`${u.origin}/player_api.php?username=${user}&password=${pass}`;
+      const resp=await fetch(`${BASE}/proxy?url=${encodeURIComponent(api)}`);
+      const data=await resp.json();
+      if(data&&data.user_info&&data.user_info.exp_date){
+        const exp=new Date(parseInt(data.user_info.exp_date)*1000);
+        const days=Math.floor((exp-Date.now())/86400000);
+        $i('mExpiry').value=exp.toISOString().split('T')[0];
+        el.textContent=`✅ Vence: ${exp.toLocaleDateString('es')} (${days<0?'EXPIRADA':days+'d'})`;
+        el.style.color=days<0?'var(--red)':days<7?'#ffaa00':'var(--gn)';
+        return;
+      }
+    }
+  } catch(e){}
+  el.textContent='No detectado — ingresa la fecha manualmente';
+  el.style.color='#888';
+};
+
+window.detectXtExpiry = async function(){
+  const srv=$i('mXSrv').value.trim(), u=$i('mXUser').value.trim(), p=$i('mXPass').value.trim();
+  if(!srv||!u||!p) return;
+  const el=$i('xpInfo');
+  el.textContent='Detectando...'; el.style.color='#888';
+  try {
+    const api=`${srv}/player_api.php?username=${u}&password=${p}`;
+    const resp=await fetch(`${BASE}/proxy?url=${encodeURIComponent(api)}`);
+    const data=await resp.json();
+    if(data&&data.user_info&&data.user_info.exp_date){
+      const exp=new Date(parseInt(data.user_info.exp_date)*1000);
+      const days=Math.floor((exp-Date.now())/86400000);
+      $i('mExpiry').value=exp.toISOString().split('T')[0];
+      el.textContent=`✅ Vence: ${exp.toLocaleDateString('es')} (${days<0?'EXPIRADA':days+'d'})`;
+      el.style.color=days<0?'var(--red)':days<7?'#ffaa00':'var(--gn)';
+      return;
+    }
+  } catch(e){}
+  el.textContent='No detectado — ingresa la fecha manualmente';
+  el.style.color='#888';
+};
+
+window.saveUser = async function(){
+  const username=$i('mUsername').value.trim();
+  const password=$i('mPass').value.trim();
+  const name=$i('mName').value.trim();
+  const listType=$i('mListType').value;
+  const expiry=$i('mExpiry').value;
+  if(!username||!password) return toast('Username y contraseña requeridos',true);
+  const isEdit = $i('mUsername').disabled;
+  const payload={username,password,name:name||username,listType};
+  if(expiry) payload.expiry=expiry;
+  if(listType==='xtream'){
+    const srv=$i('mXSrv').value.trim(), u=$i('mXUser').value.trim(), p=$i('mXPass').value.trim();
+    if(!srv||!u||!p) return toast('Completa los datos Xtream',true);
+    payload.xtreamServer=srv; payload.xtreamUser=u; payload.xtreamPass=p;
   } else {
-    displayEl.textContent = `Estado: ${info.status||'?'} | Conexiones: ${info.max_connections||'?'}`;
-    displayEl.style.color = '#888';
-  }
-}
-
-window.detectExpiry = async function() {
-  const url = $i('fUrl').value.trim();
-  if (!url) return;
-  const el = $i('expiryInfo');
-  el.textContent = 'Detectando...'; el.style.color = '#888';
-  try {
-    const urlObj = new URL(url);
-    const user = urlObj.searchParams.get('username');
-    const pass = urlObj.searchParams.get('password');
-    if (user && pass) {
-      const info = await fetchXtreamInfo(urlObj.origin, user, pass);
-      showExpiry(info, el, $i('fExpiry'));
-    } else {
-      el.textContent = 'URL no es Xtream — ingresa fecha manualmente'; el.style.color = '#888';
-    }
-  } catch(e) { el.textContent = 'Ingresa la fecha manualmente'; el.style.color = '#888'; }
-};
-
-window.detectXtreamExpiry = async function() {
-  const server = $i('fXServer').value.trim();
-  const user = $i('fXUser').value.trim();
-  const pass = $i('fXPass').value.trim();
-  if (!server || !user || !pass) return;
-  const el = $i('xExpiryInfo');
-  el.textContent = 'Detectando...'; el.style.color = '#888';
-  const info = await fetchXtreamInfo(server, user, pass);
-  showExpiry(info, el, $i('fExpiry'));
-};
-
-window.saveMAC=async function(){
-  const key=$i('editKey').value;
-  const mac=$i('fMac').value.trim().toUpperCase();
-  const name=$i('fName').value.trim();
-  const listType=$i('fListType').value;
-  const expiryStr=$i('fExpiry').value;
-  if(!mac) return showToast('Ingresa el ID/MAC','error');
-  let payload={mac,name,listType,updatedAt:Date.now()};
-  if(expiryStr) payload.expiry=new Date(expiryStr).getTime();
-  if(listType==='m3u'){
-    const url=$i('fUrl').value.trim();
-    if(!url) return showToast('Ingresa la URL','error');
+    const url=$i('mUrl').value.trim();
+    if(!url) return toast('Ingresa la URL M3U',true);
     payload.url=url;
-  } else {
-    const srv=$i('fXServer').value.trim(),u=$i('fXUser').value.trim(),p=$i('fXPass').value.trim();
-    if(!srv||!u||!p) return showToast('Completa datos Xtream','error');
-    payload.xtreamServer=srv;payload.xtreamUser=u;payload.xtreamPass=p;
-    payload.url=`${srv}/get.php?username=${u}&password=${p}&type=m3u_plus`;
   }
-  const macKey=mac.replace(/:/g,'-');
-  const uid=(await get(ref(db,'admin_uid'))).val();
-  await set(ref(db,`users/${uid}/macs/${macKey}`),{...payload,list:payload.url});
-  await set(ref(db,`mac_index/${macKey}`),payload);
-  showToast(key?'Actualizado':'Agregado');closeModal();
+  const method = isEdit ? 'PUT' : 'POST';
+  const endpoint = isEdit ? `${BASE}/api/users/${username}` : `${BASE}/api/users`;
+  const resp = await fetch(endpoint,{method,headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
+  const data = await resp.json();
+  if(data.error) return toast(data.error,true);
+  toast(isEdit?'Usuario actualizado':'Usuario creado');
+  closeModal();
 };
 
-// ── Pendientes ────────────────────────────────────────────
-async function loadPending(){
-  const s=await get(ref(db,'pending_macs'));
-  const data=s.val()||{};
-  const tbody=$i('pendingBody');if(!tbody)return;
-  const entries=Object.entries(data).sort((a,b)=>(b[1].ts||0)-(a[1].ts||0));
-  if(entries.length===0){tbody.innerHTML='<tr><td colspan="4" class="empty">Sin dispositivos pendientes</td></tr>';return;}
-  tbody.innerHTML='';
-  entries.forEach(([key,val])=>{
-    const ago=val.ts?Math.floor((Date.now()-val.ts)/1000):0;
-    const agoStr=ago<60?ago+'s':ago<3600?Math.floor(ago/60)+'m':Math.floor(ago/3600)+'h';
-    const tr=document.createElement('tr');
-    tr.innerHTML=`
-      <td><span class="mac" style="font-size:11px;">${val.deviceId||key}</span>
-          <button onclick="copyText('${val.deviceId||key}')" class="copy-btn">📋</button></td>
-      <td style="font-family:monospace;font-size:11px;color:var(--muted);">${val.mac||'—'}</td>
-      <td style="color:var(--muted);font-size:13px;">${agoStr} atrás</td>
-      <td><button class="bi edit" onclick="quickAdd('${val.deviceId||key}')" title="Asignar lista">➕</button>
-          <button class="bi del" onclick="delPending('${key}')">🗑️</button></td>`;
-    tbody.appendChild(tr);
-  });
-}
-window.loadPending=loadPending;
-window.copyText=function(t){navigator.clipboard.writeText(t).then(()=>showToast('Copiado: '+t));};
-window.quickAdd=function(id){openAddMAC();setTimeout(()=>{$i('fMac').value=id;$i('fName').value='Dispositivo '+id.substr(0,6);},100);};
-window.delPending=async function(k){await remove(ref(db,'pending_macs/'+k));loadPending();};
-
-// ── Empleados ────────────────────────────────────────────
-async function loadEmployees(){
-  const s=await get(ref(db,'employees'));
-  const data=s.val()||{};
-  const tbody=$i('empBody');if(!tbody)return;
-  const entries=Object.entries(data);
-  if(entries.length===0){tbody.innerHTML='<tr><td colspan="3" class="empty">No hay empleados</td></tr>';return;}
-  tbody.innerHTML='';
-  entries.forEach(([uid,emp])=>{
-    const tr=document.createElement('tr');
-    tr.innerHTML=`<td>${emp.email}</td><td><span class="badge m3">Empleado</span></td>
-      <td><button class="bi del" onclick="delEmployee('${uid}')">🗑️</button></td>`;
-    tbody.appendChild(tr);
-  });
-}
-window.loadEmployees=loadEmployees;
-window.openAddEmp=()=>{ $i('empModal').style.display='flex';$i('empEmail').value='';$i('empPass').value=''; };
-window.closeEmpModal=()=>$i('empModal').style.display='none';
-
-window.saveEmployee=async function(){
-  const email=$i('empEmail').value.trim();
-  const pass=$i('empPass').value;
-  if(!email||!pass) return showToast('Completa los campos','error');
-  if(pass.length<6) return showToast('Mínimo 6 caracteres','error');
-  // Save current admin user info to restore session after createUser
-  const adminEmail=window._user.email;
-  const adminPass=prompt('Para crear el empleado necesitamos verificar tu contraseña de admin:');
-  if(!adminPass) return;
-  try {
-    // Create employee account
-    const cred=await createUserWithEmailAndPassword(auth,email,pass);
-    const empUid=cred.user.uid;
-    await set(ref(db,`roles/${empUid}`),'employee');
-    await set(ref(db,`employees/${empUid}`),{email,createdAt:Date.now()});
-    // Re-login as admin
-    await signOut(auth);
-    await signInWithEmailAndPassword(auth,adminEmail,adminPass);
-    showToast('Empleado creado: '+email);
-    closeEmpModal();
-    loadEmployees();
-  } catch(e){ showToast('Error: '+e.message,'error'); }
+// ── Tabs Login ────────────────────────────────────────────
+window.switchTab = function(t){
+  document.querySelectorAll('.ltab').forEach(b=>b.classList.remove('active'));
+  document.querySelectorAll('.lform').forEach(f=>f.style.display='none');
+  $i('tab_'+t).classList.add('active');
+  $i('form_'+t).style.display='block';
 };
 
-window.delEmployee=async function(uid){
-  if(!confirm('¿Eliminar empleado?')) return;
-  await remove(ref(db,`employees/${uid}`));
-  await remove(ref(db,`roles/${uid}`));
-  showToast('Empleado eliminado');loadEmployees();
+// ── Info del servidor ──────────────────────────────────────
+window.showServerInfo = function(){
+  $i('srvModal').style.display='flex';
 };
-
-// ── Código proveedor ──────────────────────────────────────
-let _provTimer=null;
-async function loadProviderCode(){
-  const s=await get(ref(db,'app_config/provider_code_data'));
-  const d=s.val();
-  if(d&&d.code&&d.expiresAt&&d.expiresAt>Date.now()){
-    renderCodeUI(d.code,Math.floor((d.expiresAt-Date.now())/1000));
-  } else {
-    $i('codeDisplay').textContent='—';
-    $i('codeTimer').textContent='Sin código activo';
-    $i('codeBar').style.width='0%';
-  }
-}
-window.loadProviderCode=loadProviderCode;
-function renderCodeUI(code,secs){
-  if(_provTimer)clearInterval(_provTimer);
-  const TOTAL=120;let left=secs;
-  $i('codeDisplay').textContent=code;
-  function upd(){
-    if(left<=0){clearInterval(_provTimer);$i('codeDisplay').textContent='EXPIRADO';$i('codeDisplay').style.color='var(--red)';$i('codeTimer').textContent='Expirado';$i('codeBar').style.width='0%';set(ref(db,'app_config/provider_code_data'),{code:'',expiresAt:0});return;}
-    const p=(left/TOTAL)*100;
-    $i('codeBar').style.width=p+'%';
-    $i('codeBar').style.background=left>40?'var(--accent)':left>15?'#ffaa00':'var(--red)';
-    $i('codeDisplay').style.color=left>15?'var(--accent)':'var(--red)';
-    $i('codeTimer').textContent='Expira en '+Math.floor(left/60)+':'+(left%60).toString().padStart(2,'0');
-    left--;
-  }
-  upd();_provTimer=setInterval(upd,1000);
-}
-window.generateCode=async function(){
-  if(_provTimer)clearInterval(_provTimer);
-  const chars='ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
-  let code='';for(let i=0;i<8;i++)code+=chars[Math.floor(Math.random()*chars.length)];
-  const expiresAt=Date.now()+120000;
-  await set(ref(db,'app_config/provider_code_data'),{code,expiresAt});
-  showToast('Código: '+code+' (2 min)');
-  renderCodeUI(code,120);
-};
-
-// ── Tabs ─────────────────────────────────────────────────
-document.addEventListener('DOMContentLoaded',()=>{
-  document.querySelectorAll('.nav-tab').forEach(btn=>{
-    btn.addEventListener('click',()=>{
-      document.querySelectorAll('.nav-tab').forEach(b=>b.classList.remove('active'));
-      document.querySelectorAll('.tab-pane').forEach(p=>p.style.display='none');
-      btn.classList.add('active');
-      const t=btn.dataset.tab;
-      $i(t).style.display='block';
-      if(t==='tPending')loadPending();
-      if(t==='tProvider')loadProviderCode();
-      if(t==='tEmployees')loadEmployees();
-    });
-  });
-});
+window.closeSrvModal = ()=> $i('srvModal').style.display='none';
 </script>
 <link href="https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&family=Syne:wght@400;600;800&display=swap" rel="stylesheet">
 <style>
@@ -424,94 +289,96 @@ document.addEventListener('DOMContentLoaded',()=>{
 *{margin:0;padding:0;box-sizing:border-box;}
 body{background:var(--bg);color:var(--tx);font-family:'Syne',sans-serif;min-height:100vh;}
 body::before{content:'';position:fixed;inset:0;background-image:linear-gradient(rgba(255,79,0,.03)1px,transparent 1px),linear-gradient(90deg,rgba(255,79,0,.03)1px,transparent 1px);background-size:40px 40px;pointer-events:none;}
+
 /* LOGIN */
 #loginScreen{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;z-index:100;background:var(--bg);}
-.lbox{width:420px;background:var(--s1);border:1px solid var(--bd);border-top:3px solid var(--ac);padding:48px 40px;box-shadow:0 0 60px rgba(255,79,0,.1);position:relative;z-index:1;}
-.llogo{text-align:center;margin-bottom:32px;}
-.llogo .lt{font-size:32px;font-weight:800;letter-spacing:-1px;}
-.llogo .lt span{color:var(--ac);}
-.llogo .ls{font-family:'Space Mono',monospace;font-size:11px;color:var(--mu);letter-spacing:3px;margin-top:4px;}
-.tabs-a{display:flex;margin-bottom:28px;border-bottom:1px solid var(--bd);}
-.tab-a{flex:1;background:none;border:none;border-bottom:2px solid transparent;padding:12px;font-family:'Syne',sans-serif;font-size:14px;font-weight:600;color:var(--mu);cursor:pointer;margin-bottom:-1px;}
-.tab-a.active{color:var(--ac);border-bottom-color:var(--ac);}
-.af{display:none;}.af.active{display:block;}
-.fg{margin-bottom:16px;}
-.fg label{display:block;font-size:11px;font-weight:600;letter-spacing:2px;color:var(--mu);margin-bottom:6px;text-transform:uppercase;}
-input[type=text],input[type=email],input[type=password],input[type=url],input[type=date],select,textarea{width:100%;background:var(--s2);border:1px solid var(--bd);color:var(--tx);padding:10px 14px;font-family:'Space Mono',monospace;font-size:13px;outline:none;transition:border-color .2s;}
+.lbox{width:400px;background:var(--s1);border:1px solid var(--bd);border-top:3px solid var(--ac);padding:44px 36px;box-shadow:0 0 60px rgba(255,79,0,.1);}
+.llogo{text-align:center;margin-bottom:28px;}
+.llogo h1{font-size:28px;font-weight:800;letter-spacing:-1px;}.llogo h1 span{color:var(--ac);}
+.llogo p{font-family:'Space Mono',monospace;font-size:11px;color:var(--mu);letter-spacing:3px;margin-top:4px;}
+.ltabs{display:flex;margin-bottom:24px;border-bottom:1px solid var(--bd);}
+.ltab{flex:1;background:none;border:none;border-bottom:2px solid transparent;padding:11px;font-family:'Syne',sans-serif;font-size:13px;font-weight:700;color:var(--mu);cursor:pointer;margin-bottom:-1px;}
+.ltab.active{color:var(--ac);border-bottom-color:var(--ac);}
+.lform{display:none;}
+.fg{margin-bottom:14px;}
+.fg label{display:block;font-size:11px;font-weight:700;letter-spacing:2px;color:var(--mu);margin-bottom:5px;text-transform:uppercase;}
+input[type=text],input[type=email],input[type=password],input[type=url],input[type=date],select{width:100%;background:var(--s2);border:1px solid var(--bd);color:var(--tx);padding:10px 13px;font-family:'Space Mono',monospace;font-size:13px;outline:none;transition:border .2s;}
 input:focus,select:focus{border-color:var(--ac);}
-.btn-p{width:100%;background:var(--ac);border:none;color:#fff;padding:13px;font-family:'Syne',sans-serif;font-size:15px;font-weight:800;cursor:pointer;letter-spacing:1px;text-transform:uppercase;margin-top:8px;}
-.btn-p:hover{background:var(--ac2);}
+.btn{width:100%;background:var(--ac);border:none;color:#fff;padding:12px;font-family:'Syne',sans-serif;font-size:14px;font-weight:800;cursor:pointer;text-transform:uppercase;letter-spacing:1px;margin-top:6px;}
+.btn:hover{background:var(--ac2);}
+
 /* APP */
-#appScreen{display:none;flex-direction:column;min-height:100vh;position:relative;z-index:1;}
-.topbar{display:flex;align-items:center;justify-content:space-between;padding:16px 32px;background:var(--s1);border-bottom:1px solid var(--bd);position:sticky;top:0;z-index:50;}
-.tlogo{font-size:22px;font-weight:800;letter-spacing:-1px;}.tlogo span{color:var(--ac);}
-.tright{display:flex;align-items:center;gap:12px;}
-#userEmail{font-family:'Space Mono',monospace;font-size:12px;color:var(--mu);}
-#userRole{font-size:12px;color:var(--ac2);font-weight:600;}
-.btn-out{background:none;border:1px solid var(--bd);color:var(--mu);padding:7px 16px;font-family:'Syne',sans-serif;font-size:13px;font-weight:600;cursor:pointer;}
+#appScreen{display:none;flex-direction:column;min-height:100vh;}
+.topbar{display:flex;align-items:center;justify-content:space-between;padding:14px 28px;background:var(--s1);border-bottom:1px solid var(--bd);position:sticky;top:0;z-index:50;}
+.tlogo{font-size:20px;font-weight:800;}.tlogo span{color:var(--ac);}
+.tright{display:flex;align-items:center;gap:10px;}
+#userEmail{font-family:'Space Mono',monospace;font-size:11px;color:var(--mu);}
+.btn-out{background:none;border:1px solid var(--bd);color:var(--mu);padding:6px 14px;font-family:'Syne',sans-serif;font-size:12px;font-weight:700;cursor:pointer;}
 .btn-out:hover{border-color:var(--red);color:var(--red);}
-/* NAV */
-.nav-bar{display:flex;border-bottom:1px solid var(--bd);background:var(--s1);padding:0 32px;}
-.nav-tab{background:none;border:none;border-bottom:2px solid transparent;color:var(--mu);padding:14px 20px;font-family:'Syne',sans-serif;font-size:14px;font-weight:600;cursor:pointer;margin-bottom:-1px;}
-.nav-tab.active{color:var(--ac);border-bottom-color:var(--ac);}
-.tab-pane{display:none;padding:32px;}
-.tab-pane.default{display:block;}
-/* STATS */
-.stats{display:grid;grid-template-columns:repeat(3,1fr);gap:16px;margin-bottom:32px;}
-.sc{background:var(--s1);border:1px solid var(--bd);padding:20px 24px;display:flex;align-items:center;gap:16px;}
-.sv{font-size:32px;font-weight:800;color:var(--ac);line-height:1;}
-.sl{font-size:12px;color:var(--mu);font-weight:600;letter-spacing:1px;text-transform:uppercase;margin-top:2px;}
-/* SECTION HEADER */
-.sh{display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;}
-.st2{font-size:20px;font-weight:800;}
-.btn-add{background:var(--ac);border:none;color:#fff;padding:10px 22px;font-family:'Syne',sans-serif;font-size:14px;font-weight:700;cursor:pointer;display:flex;align-items:center;gap:8px;}
+.btn-srv{background:rgba(255,79,0,.1);border:1px solid rgba(255,79,0,.3);color:var(--ac);padding:6px 14px;font-family:'Syne',sans-serif;font-size:12px;font-weight:700;cursor:pointer;}
+.btn-srv:hover{background:rgba(255,79,0,.2);}
+
+/* CONTENT */
+.content{padding:28px;}
+.stats{display:grid;grid-template-columns:repeat(3,1fr);gap:14px;margin-bottom:24px;}
+.sc{background:var(--s1);border:1px solid var(--bd);padding:18px 22px;display:flex;align-items:center;gap:14px;}
+.sv{font-size:30px;font-weight:800;color:var(--ac);line-height:1;}
+.sl{font-size:11px;color:var(--mu);font-weight:700;letter-spacing:1px;text-transform:uppercase;margin-top:2px;}
+.sh{display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;}
+.sh h2{font-size:18px;font-weight:800;}
+.btn-add{background:var(--ac);border:none;color:#fff;padding:9px 20px;font-family:'Syne',sans-serif;font-size:13px;font-weight:700;cursor:pointer;}
 .btn-add:hover{background:var(--ac2);}
-.btn-sec{background:var(--s2);border:1px solid var(--bd);color:var(--mu);padding:10px 22px;font-family:'Syne',sans-serif;font-size:14px;font-weight:700;cursor:pointer;}
-.btn-sec:hover{border-color:var(--ac);color:var(--ac);}
+
 /* TABLE */
 .tw{background:var(--s1);border:1px solid var(--bd);overflow-x:auto;}
 table{width:100%;border-collapse:collapse;}
 thead tr{background:var(--s2);border-bottom:1px solid var(--bd);}
-th{padding:12px 16px;text-align:left;font-size:11px;font-weight:700;letter-spacing:2px;color:var(--mu);text-transform:uppercase;}
-td{padding:13px 16px;border-bottom:1px solid var(--bd);font-size:13px;}
+th{padding:11px 15px;text-align:left;font-size:10px;font-weight:700;letter-spacing:2px;color:var(--mu);text-transform:uppercase;}
+td{padding:12px 15px;border-bottom:1px solid var(--bd);font-size:13px;}
 tr:last-child td{border-bottom:none;}
-tr:hover td{background:rgba(255,79,0,.02);}
-.mac{font-family:'Space Mono',monospace;font-size:12px;color:var(--ac2);}
-.badge{display:inline-block;padding:2px 8px;font-size:10px;font-weight:700;letter-spacing:1px;text-transform:uppercase;border-radius:2px;}
+.mono{font-family:'Space Mono',monospace;font-size:12px;color:var(--ac2);}
+.pwd{color:var(--mu);}
+.badge{display:inline-block;padding:2px 7px;font-size:10px;font-weight:700;letter-spacing:1px;text-transform:uppercase;}
 .badge.m3{background:rgba(59,130,246,.15);color:var(--m3);border:1px solid rgba(59,130,246,.3);}
 .badge.xt{background:rgba(168,85,247,.15);color:var(--xt);border:1px solid rgba(168,85,247,.3);}
-.st{display:inline-block;padding:3px 10px;font-size:11px;font-weight:700;}
+.st{display:inline-block;padding:3px 9px;font-size:11px;font-weight:700;}
 .st.on{background:rgba(0,232,122,.1);color:var(--gn);}
 .st.off{background:rgba(255,51,85,.1);color:var(--red);}
-.acts{display:flex;gap:6px;}
-.bi{background:var(--s2);border:1px solid var(--bd);cursor:pointer;width:30px;height:30px;display:flex;align-items:center;justify-content:center;font-size:13px;}
+.acts{display:flex;gap:5px;}
+.bi{background:var(--s2);border:1px solid var(--bd);cursor:pointer;width:29px;height:29px;display:flex;align-items:center;justify-content:center;font-size:13px;}
 .bi.edit:hover{border-color:var(--ac);}
 .bi.del:hover{border-color:var(--red);}
-.copy-btn{background:none;border:none;cursor:pointer;font-size:13px;color:var(--ac);padding:0 4px;}
-.empty{text-align:center;color:var(--mu);padding:36px;font-size:14px;}
+.empty{text-align:center;color:var(--mu);padding:32px;font-size:13px;}
+
 /* MODAL */
-.mo{display:none;position:fixed;inset:0;background:rgba(0,0,0,.8);z-index:200;align-items:center;justify-content:center;}
-.mb{background:var(--s1);border:1px solid var(--bd);border-top:3px solid var(--ac);width:520px;max-width:95vw;max-height:90vh;overflow-y:auto;padding:32px;}
-.mh{display:flex;align-items:center;justify-content:space-between;margin-bottom:24px;}
-.mt{font-size:18px;font-weight:800;}
-.mc{background:none;border:none;color:var(--mu);font-size:20px;cursor:pointer;}
-.mc:hover{color:var(--red);}
-.tsw{display:flex;gap:8px;margin-bottom:16px;}
-.tb{flex:1;background:var(--s2);border:1px solid var(--bd);color:var(--mu);padding:10px;font-family:'Syne',sans-serif;font-size:13px;font-weight:700;cursor:pointer;text-transform:uppercase;letter-spacing:1px;}
+.mo{display:none;position:fixed;inset:0;background:rgba(0,0,0,.82);z-index:200;align-items:center;justify-content:center;}
+.mb{background:var(--s1);border:1px solid var(--bd);border-top:3px solid var(--ac);width:500px;max-width:95vw;max-height:92vh;overflow-y:auto;padding:28px;}
+.mh{display:flex;align-items:center;justify-content:space-between;margin-bottom:20px;}
+.mh h3{font-size:17px;font-weight:800;}
+.mclose{background:none;border:none;color:var(--mu);font-size:20px;cursor:pointer;}.mclose:hover{color:var(--red);}
+.tsw{display:flex;gap:8px;margin-bottom:12px;}
+.tb{flex:1;background:var(--s2);border:1px solid var(--bd);color:var(--mu);padding:9px;font-family:'Syne',sans-serif;font-size:13px;font-weight:700;cursor:pointer;text-transform:uppercase;}
 .tb.sel,.tb:hover{border-color:var(--ac);color:var(--ac);}
-.mas{display:flex;gap:10px;margin-top:24px;}
-.bcn{flex:1;background:none;border:1px solid var(--bd);color:var(--mu);padding:11px;font-family:'Syne',sans-serif;font-size:14px;font-weight:700;cursor:pointer;}
-.bsv{flex:2;background:var(--ac);border:none;color:#fff;padding:11px;font-family:'Syne',sans-serif;font-size:14px;font-weight:800;cursor:pointer;text-transform:uppercase;}
+.fp{display:flex;gap:8px;}
+.fp input{flex:1;}
+.fp button{background:var(--s2);border:1px solid var(--bd);color:var(--mu);padding:0 12px;cursor:pointer;font-size:14px;white-space:nowrap;}
+.fp button:hover{border-color:var(--ac);color:var(--ac);}
+.hint{font-size:11px;color:var(--mu);margin-top:5px;}
+.xpinfo{font-size:12px;margin-top:5px;font-weight:600;}
+.mbtns{display:flex;gap:8px;margin-top:20px;}
+.bcn{flex:1;background:none;border:1px solid var(--bd);color:var(--mu);padding:10px;font-family:'Syne',sans-serif;font-size:13px;font-weight:700;cursor:pointer;}
+.bsv{flex:2;background:var(--ac);border:none;color:#fff;padding:10px;font-family:'Syne',sans-serif;font-size:13px;font-weight:800;cursor:pointer;text-transform:uppercase;}
 .bsv:hover{background:var(--ac2);}
-.hint{font-size:11px;color:var(--mu);margin-top:6px;}
-.einfo{font-size:12px;margin-top:6px;font-weight:600;}
-/* PROVIDER CODE */
-.cbox{background:var(--s1);border:1px solid var(--bd);border-top:3px solid var(--ac);padding:32px;max-width:500px;}
-.cd{font-family:'Space Mono',monospace;font-size:36px;font-weight:700;color:var(--ac);letter-spacing:8px;text-align:center;padding:20px;background:var(--s2);border:1px solid var(--bd);margin:16px 0;}
-.prog{background:var(--s2);border:1px solid var(--bd);height:8px;border-radius:4px;overflow:hidden;margin-bottom:10px;}
-.progb{height:100%;width:0%;background:var(--ac);transition:width 1s linear,background 1s;border-radius:4px;}
+
+/* SERVER INFO MODAL */
+.srvbox{background:var(--s1);border:1px solid var(--bd);border-top:3px solid var(--gn);width:480px;max-width:95vw;padding:28px;}
+.srvrow{display:flex;flex-direction:column;gap:4px;background:var(--s2);border:1px solid var(--bd);padding:14px 16px;margin-bottom:10px;}
+.srvlabel{font-size:10px;font-weight:700;letter-spacing:2px;color:var(--mu);text-transform:uppercase;}
+.srvval{font-family:'Space Mono',monospace;font-size:13px;color:var(--gn);word-break:break-all;}
+.srvnote{font-size:12px;color:var(--mu);line-height:1.6;margin-top:12px;padding:10px 14px;border:1px solid var(--bd);}
+
 /* TOAST */
-.toast{position:fixed;bottom:24px;right:24px;background:var(--s2);border:1px solid var(--bd);border-left:3px solid var(--gn);color:var(--tx);padding:12px 20px;font-size:14px;z-index:999;opacity:0;pointer-events:none;transform:translateY(8px);transition:all .3s;max-width:320px;}
+.toast{position:fixed;bottom:22px;right:22px;background:var(--s2);border:1px solid var(--bd);border-left:3px solid var(--gn);color:var(--tx);padding:11px 18px;font-size:13px;z-index:999;opacity:0;pointer-events:none;transform:translateY(8px);transition:all .3s;max-width:300px;}
 .toast.show{opacity:1;transform:translateY(0);}
 .toast.err{border-left-color:var(--red);}
 </style>
@@ -521,149 +388,108 @@ tr:hover td{background:rgba(255,79,0,.02);}
 <!-- LOGIN -->
 <div id="loginScreen">
   <div class="lbox">
-    <div class="llogo"><div class="lt">FENIX<span>TV</span></div><div class="ls">PANEL DE CONTROL</div></div>
-    <div class="tabs-a">
-      <button class="tab-a active" onclick="switchTab('login')">Iniciar Sesión</button>
-      <button class="tab-a" id="tabRegister" onclick="switchTab('reg')" style="display:none">Crear Admin</button>
+    <div class="llogo"><h1>IPTV <span>PANEL</span></h1><p>GESTIÓN DE USUARIOS</p></div>
+    <div class="ltabs">
+      <button class="ltab active" id="tab_login" onclick="switchTab('login')">Iniciar sesión</button>
+      <button class="ltab" id="tab_reg" onclick="switchTab('reg')" style="display:none">Crear admin</button>
     </div>
-    <div id="afLogin" class="af active">
-      <div class="fg"><label>Email</label><input type="email" id="loginEmail" placeholder="tu@email.com"></div>
-      <div class="fg"><label>Contraseña</label><input type="password" id="loginPass" placeholder="••••••••" onkeydown="if(event.key==='Enter')doLogin()"></div>
-      <button class="btn-p" onclick="doLogin()">Entrar →</button>
+    <div class="lform" id="form_login" style="display:block">
+      <div class="fg"><label>Email</label><input type="email" id="lEmail" placeholder="tu@email.com"></div>
+      <div class="fg"><label>Contraseña</label><input type="password" id="lPass" placeholder="••••••••" onkeydown="if(event.key==='Enter')doLogin()"></div>
+      <button class="btn" onclick="doLogin()">Entrar →</button>
     </div>
-    <div id="afReg" class="af">
-      <div style="background:rgba(255,79,0,.08);border:1px solid rgba(255,79,0,.25);padding:10px 14px;font-size:12px;color:var(--ac2);margin-bottom:16px;">⚠️ Solo se puede crear <strong>un administrador</strong>. Después esta opción desaparecerá.</div>
-      <div class="fg"><label>Email</label><input type="email" id="regEmail" placeholder="admin@email.com"></div>
-      <div class="fg"><label>Contraseña</label><input type="password" id="regPass" placeholder="mínimo 6 caracteres"></div>
-      <div class="fg"><label>Confirmar contraseña</label><input type="password" id="regPass2"></div>
-      <button class="btn-p" onclick="doRegister()">Crear cuenta Admin →</button>
+    <div class="lform" id="form_reg">
+      <div style="background:rgba(255,79,0,.08);border:1px solid rgba(255,79,0,.25);padding:10px 13px;font-size:12px;color:var(--ac2);margin-bottom:14px;">⚠️ Solo se puede crear <strong>un administrador</strong>.</div>
+      <div class="fg"><label>Email</label><input type="email" id="rEmail" placeholder="admin@email.com"></div>
+      <div class="fg"><label>Contraseña</label><input type="password" id="rPass" placeholder="mínimo 6 caracteres"></div>
+      <div class="fg"><label>Confirmar</label><input type="password" id="rPass2" placeholder="repetir contraseña"></div>
+      <button class="btn" onclick="doRegister()">Crear cuenta →</button>
     </div>
   </div>
 </div>
 
 <!-- APP -->
 <div id="appScreen">
-  <nav class="topbar">
-    <div class="tlogo">FENIX<span>TV</span> <span style="font-size:13px;color:var(--mu);font-weight:400;">PANEL</span></div>
+  <div class="topbar">
+    <div class="tlogo">IPTV <span>PANEL</span></div>
     <div class="tright">
-      <span id="userRole"></span><span id="userEmail"></span>
-      <button class="btn-out" onclick="doLogout()">Cerrar sesión</button>
+      <button class="btn-srv" onclick="showServerInfo()">📡 Datos de conexión</button>
+      <span id="userEmail"></span>
+      <button class="btn-out" onclick="doLogout()">Salir</button>
     </div>
-  </nav>
-  <div class="nav-bar">
-    <button class="nav-tab active" data-tab="tMacs">📺 Dispositivos</button>
-    <button class="nav-tab admin-only" data-tab="tPending">🔔 Pendientes</button>
-    <button class="nav-tab admin-only" data-tab="tProvider">🔑 Código Proveedor</button>
-    <button class="nav-tab admin-only" data-tab="tEmployees">👥 Empleados</button>
   </div>
-
-  <!-- TAB MACS -->
-  <div id="tMacs" class="tab-pane default">
+  <div class="content">
     <div class="stats">
-      <div class="sc"><div style="font-size:28px;">📺</div><div><div class="sv" id="statTotal">0</div><div class="sl">MACs registradas</div></div></div>
-      <div class="sc"><div style="font-size:28px;">✅</div><div><div class="sv" id="statActive">0</div><div class="sl">Con lista activa</div></div></div>
-      <div class="sc"><div style="font-size:28px;">🔥</div><div><div class="sv" style="color:var(--xt)">FB</div><div class="sl">Firebase conectado</div></div></div>
+      <div class="sc"><div style="font-size:26px;">👤</div><div><div class="sv" id="statTotal">0</div><div class="sl">Usuarios</div></div></div>
+      <div class="sc"><div style="font-size:26px;">✅</div><div><div class="sv" id="statActive">0</div><div class="sl">Activos</div></div></div>
+      <div class="sc"><div style="font-size:26px;">📡</div><div><div class="sv" style="color:var(--gn);font-size:18px;">ONLINE</div><div class="sl">Servidor</div></div></div>
     </div>
-    <div class="sh"><div class="st2">Dispositivos registrados</div><button class="btn-add" onclick="openAddMAC()">+ Agregar</button></div>
+    <div class="sh"><h2>Usuarios registrados</h2><button class="btn-add" onclick="openAdd()">+ Agregar</button></div>
     <div class="tw"><table>
-      <thead><tr><th>ID/MAC</th><th>Nombre</th><th>Lista</th><th>Vence</th><th>Estado</th><th>Acción</th></tr></thead>
-      <tbody id="macTableBody"><tr><td colspan="6" class="empty">Cargando...</td></tr></tbody>
-    </table></div>
-  </div>
-
-  <!-- TAB PENDIENTES -->
-  <div id="tPending" class="tab-pane admin-only">
-    <div class="sh"><div class="st2">🔔 Dispositivos esperando lista</div><button class="btn-sec" onclick="loadPending()">🔄 Actualizar</button></div>
-    <p style="font-size:13px;color:var(--mu);margin-bottom:20px;">Abrieron la app pero aún no tienen lista. Clic en ➕ para asignarles una.</p>
-    <div class="tw"><table>
-      <thead><tr><th>ID Dispositivo</th><th>MAC</th><th>Último acceso</th><th>Acción</th></tr></thead>
-      <tbody id="pendingBody"><tr><td colspan="4" class="empty">Cargando...</td></tr></tbody>
-    </table></div>
-  </div>
-
-  <!-- TAB CÓDIGO PROVEEDOR -->
-  <div id="tProvider" class="tab-pane admin-only">
-    <div class="cbox">
-      <div class="st2" style="margin-bottom:12px;">🔑 Código de Acceso para Proveedores</div>
-      <p style="font-size:13px;color:var(--mu);margin-bottom:16px;line-height:1.7;">Protege la sección <strong>LIST USERS</strong> en la app. El código expira automáticamente a los <strong>2 minutos</strong>.</p>
-      <div class="cd" id="codeDisplay">—</div>
-      <div class="prog"><div class="progb" id="codeBar"></div></div>
-      <p id="codeTimer" style="font-size:13px;color:var(--mu);text-align:center;margin-bottom:16px;">Sin código activo</p>
-      <button class="btn-add" onclick="generateCode()" style="width:100%;justify-content:center;">🔄 Generar nuevo código (2 min)</button>
-      <p style="font-size:11px;color:var(--mu);margin-top:10px;text-align:center;">Al generar uno nuevo, el anterior expira inmediatamente.</p>
-    </div>
-  </div>
-
-  <!-- TAB EMPLEADOS -->
-  <div id="tEmployees" class="tab-pane admin-only">
-    <div class="sh"><div class="st2">👥 Cuentas de Empleados</div><button class="btn-add" onclick="openAddEmp()">+ Agregar empleado</button></div>
-    <p style="font-size:13px;color:var(--mu);margin-bottom:20px;">Los empleados pueden agregar y editar listas. No pueden eliminar MACs ni ver el código de proveedor.</p>
-    <div class="tw"><table>
-      <thead><tr><th>Email</th><th>Rol</th><th>Acción</th></tr></thead>
-      <tbody id="empBody"><tr><td colspan="3" class="empty">Cargando...</td></tr></tbody>
+      <thead><tr><th>Usuario</th><th>Contraseña</th><th>Tipo</th><th>Vence</th><th>Estado</th><th>Acciones</th></tr></thead>
+      <tbody id="tBody"><tr><td colspan="6" class="empty">Cargando...</td></tr></tbody>
     </table></div>
   </div>
 </div>
 
-<!-- MODAL MAC -->
-<div class="mo" id="macModal">
+<!-- MODAL USUARIO -->
+<div class="mo" id="modal">
   <div class="mb">
-    <div class="mh"><div class="mt" id="modalTitle">Agregar dispositivo</div><button class="mc" onclick="closeModal()">✕</button></div>
-    <input type="hidden" id="editKey">
-    <div class="fg"><label>ID de dispositivo o MAC</label><input type="text" id="fMac" placeholder="ID de pestaña Pendientes o AA:BB:CC" style="font-family:'Space Mono',monospace;"></div>
-    <div class="fg"><label>Nombre</label><input type="text" id="fName" placeholder="ej. TV Sala"></div>
+    <div class="mh"><h3 id="mTitle">Agregar usuario</h3><button class="mclose" onclick="closeModal()">✕</button></div>
+    <div class="fg"><label>Usuario (login en la app)</label><input type="text" id="mUsername" placeholder="ej. juan123" autocomplete="off"></div>
+    <div class="fg">
+      <label>Contraseña</label>
+      <div class="fp">
+        <input type="text" id="mPass" placeholder="contraseña" autocomplete="off">
+        <button onclick="genPass()">🔀 Generar</button>
+      </div>
+    </div>
+    <div class="fg"><label>Nombre del cliente (opcional)</label><input type="text" id="mName" placeholder="ej. Juan García"></div>
     <div class="fg">
       <label>Tipo de lista</label>
       <div class="tsw">
         <button class="tb sel" id="btnM3U" onclick="selectType('m3u')">📋 M3U</button>
         <button class="tb" id="btnXt" onclick="selectType('xtream')">⚡ Xtream</button>
       </div>
-      <select id="fListType" style="display:none" onchange="toggleFields()"><option value="m3u">M3U</option><option value="xtream">Xtream</option></select>
+      <select id="mListType" style="display:none" onchange="toggleFields()"><option value="m3u">M3U</option><option value="xtream">Xtream</option></select>
     </div>
-    <div id="m3uF">
+    <div id="fM3U">
       <div class="fg">
-        <label>URL M3U</label>
-        <input type="url" id="fUrl" placeholder="http://servidor/lista.m3u" onblur="detectExpiry()">
-        <p class="hint">Se detectará la expiración automáticamente al pegar la URL</p>
-        <p class="einfo" id="expiryInfo"></p>
+        <label>URL M3U del proveedor</label>
+        <input type="url" id="mUrl" placeholder="http://proveedor/lista.m3u" onblur="detectExpiry()">
+        <p class="hint">La fecha de vencimiento se detecta automáticamente si es una URL Xtream</p>
+        <p class="xpinfo" id="xpInfo"></p>
       </div>
     </div>
-    <div id="xtF" style="display:none">
-      <div class="fg"><label>Servidor</label><input type="url" id="fXServer" placeholder="http://servidor:8080" onblur="detectXtreamExpiry()"></div>
-      <div class="fg"><label>Usuario</label><input type="text" id="fXUser" onblur="detectXtreamExpiry()"></div>
-      <div class="fg"><label>Contraseña</label><input type="password" id="fXPass" onblur="detectXtreamExpiry()"></div>
-      <p class="einfo" id="xExpiryInfo"></p>
+    <div id="fXt" style="display:none">
+      <div class="fg"><label>Servidor del proveedor</label><input type="url" id="mXSrv" placeholder="http://proveedor:8080" onblur="detectXtExpiry()"></div>
+      <div class="fg"><label>Usuario del proveedor</label><input type="text" id="mXUser" onblur="detectXtExpiry()"></div>
+      <div class="fg"><label>Contraseña del proveedor</label><input type="password" id="mXPass" onblur="detectXtExpiry()"></div>
+      <p class="xpinfo" id="xpInfo" style="margin-bottom:12px;"></p>
     </div>
-    <div class="fg"><label>Fecha de vencimiento</label><input type="date" id="fExpiry"><p class="hint">Se detecta automáticamente con Xtream. También puedes editarla manualmente.</p></div>
-    <div class="mas"><button class="bcn" onclick="closeModal()">Cancelar</button><button class="bsv" onclick="saveMAC()">💾 Guardar</button></div>
+    <div class="fg"><label>Fecha de vencimiento</label><input type="date" id="mExpiry"></div>
+    <div class="mbtns">
+      <button class="bcn" onclick="closeModal()">Cancelar</button>
+      <button class="bsv" onclick="saveUser()">💾 Guardar</button>
+    </div>
   </div>
 </div>
 
-<!-- MODAL EMPLEADO -->
-<div class="mo" id="empModal">
-  <div class="mb" style="max-width:400px;">
-    <div class="mh"><div class="mt">Agregar Empleado</div><button class="mc" onclick="closeEmpModal()">✕</button></div>
-    <p style="font-size:13px;color:var(--mu);margin-bottom:20px;">El empleado puede agregar/editar listas. No puede eliminar MACs ni ver el código de proveedor.</p>
-    <div class="fg"><label>Email del empleado</label><input type="email" id="empEmail" placeholder="empleado@email.com"></div>
-    <div class="fg"><label>Contraseña temporal</label><input type="password" id="empPass" placeholder="mínimo 6 caracteres"></div>
-    <div class="mas"><button class="bcn" onclick="closeEmpModal()">Cancelar</button><button class="bsv" onclick="saveEmployee()">Crear empleado</button></div>
+<!-- MODAL SERVIDOR -->
+<div class="mo" id="srvModal">
+  <div class="srvbox">
+    <div class="mh" style="margin-bottom:16px;"><h3 style="color:var(--gn);">📡 Datos de conexión para la app</h3><button class="mclose" onclick="closeSrvModal()">✕</button></div>
+    <div class="srvrow"><div class="srvlabel">Servidor (URL del portal)</div><div class="srvval">https://streamflix-production-9559.up.railway.app</div></div>
+    <div class="srvrow"><div class="srvlabel">Usuario</div><div class="srvval">el username que creaste en el panel</div></div>
+    <div class="srvrow"><div class="srvlabel">Contraseña</div><div class="srvval">la contraseña que creaste en el panel</div></div>
+    <div class="srvnote">
+      En la app (IPTV Smarters) elegí <strong>"Login with Xtream Codes API"</strong> e ingresá estos datos.<br><br>
+      Clic en <strong>📋</strong> en la tabla para copiar los datos de un usuario listo para pegarlos.
+    </div>
+    <button class="bsv" onclick="closeSrvModal()" style="width:100%;margin-top:12px;">Cerrar</button>
   </div>
 </div>
 
 <div class="toast" id="toast"></div>
-
-<script>
-function switchTab(t){
-  document.querySelectorAll('.tab-a').forEach(b=>b.classList.remove('active'));
-  document.querySelectorAll('.af').forEach(f=>{f.style.display='none';f.classList.remove('active');});
-  if(t==='login'){
-    document.querySelector('.tab-a').classList.add('active');
-    document.getElementById('afLogin').style.display='block';
-  } else {
-    document.getElementById('tabRegister').classList.add('active');
-    document.getElementById('afReg').style.display='block';
-  }
-}
-</script>
 </body>
 </html>
