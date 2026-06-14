@@ -3,6 +3,7 @@ const cors    = require('cors');
 const path    = require('path');
 const https   = require('https');
 const http    = require('http');
+const crypto  = require('crypto');
 
 // ── Firebase Admin ────────────────────────────────────────
 const admin = require('firebase-admin');
@@ -27,7 +28,6 @@ try {
   console.warn('Firebase Admin init warning:', e.message);
 }
 
-// ── Firebase REST (no requiere service account) ───────────
 const FB_DB = 'https://helio-santino-rp-default-rtdb.firebaseio.com';
 
 async function fbGet(nodePath) {
@@ -65,117 +65,51 @@ async function fbSet(nodePath, value) {
   });
 }
 
-// ── Helpers MAC ───────────────────────────────────────────
-function macToKey(mac) {
-  return mac.toUpperCase().replace(/:/g, '-');
+async function fbDelete(nodePath) {
+  return new Promise((resolve) => {
+    const urlObj = new URL(`${FB_DB}/${nodePath}.json`);
+    const options = {
+      hostname: urlObj.hostname,
+      path: urlObj.pathname,
+      method: 'DELETE',
+    };
+    const req = https.request(options, res => {
+      let d = '';
+      res.on('data', c => d += c);
+      res.on('end', () => resolve(true));
+    });
+    req.on('error', () => resolve(false));
+    req.end();
+  });
 }
 
-function extractMac(str) {
-  if (!str) return null;
-  const m = String(str).match(/([0-9A-Fa-f]{2}[:\-]){5}[0-9A-Fa-f]{2}/);
-  if (m) return m[0].toUpperCase().replace(/-/g, ':');
-  return null;
-}
-
-// ── Token cache ───────────────────────────────────────────
-const tokenCache = new Map();
-
-function generateToken(mac) {
-  const ts = Math.floor(Date.now() / 1000);
-  let h = 0;
-  const raw = `${mac}-${ts}-FENIXTV`;
-  for (let i = 0; i < raw.length; i++) h = (Math.imul(31, h) + raw.charCodeAt(i)) | 0;
-  return Math.abs(h).toString(16).padStart(8,'0').toUpperCase() + ts.toString(16).toUpperCase();
-}
-
-function storeToken(mac, token) {
-  tokenCache.set(token, { mac, expiresAt: Date.now() + 7200000 }); // 2 horas
-  for (const [k, v] of tokenCache) {
-    if (v.expiresAt < Date.now()) tokenCache.delete(k);
-  }
-}
-
-function getMacFromToken(token) {
-  const entry = tokenCache.get(token);
-  if (!entry || entry.expiresAt < Date.now()) { tokenCache.delete(token); return null; }
-  return entry.mac;
-}
-
-// ── Leer MAC de TODAS las fuentes posibles ────────────────
-function getMacFromRequest(req) {
-  // 1. Authorization: Bearer <token>
-  const auth = req.headers['authorization'] || '';
-  if (auth.startsWith('Bearer ')) {
-    const token = auth.slice(7).trim();
-    const mac = getMacFromToken(token);
-    if (mac) return mac;
-  }
-
-  // 2. Cookie: mac=XX:XX:XX:XX:XX:XX
-  const cookie = req.headers['cookie'] || '';
-  const macFromCookie = extractMac(cookie);
-  if (macFromCookie) return macFromCookie;
-
-  // 3. Headers alternativos
-  for (const h of ['x-real-mac','x-mac-address','x-stb-mac','mac','device-mac']) {
-    const mac = extractMac(req.headers[h]);
-    if (mac) return mac;
-  }
-
-  // 4. Query string ?mac=
-  if (req.query.mac) {
-    const mac = extractMac(req.query.mac);
-    if (mac) return mac;
-  }
-
-  // 5. Body POST
-  if (req.body && req.body.mac) {
-    const mac = extractMac(req.body.mac);
-    if (mac) return mac;
-  }
-
-  return null;
-}
-
-async function getDeviceByMac(mac) {
-  const key = macToKey(mac);
-  return await fbGet(`mac_index/${key}`);
+function fetchExternal(url) {
+  return new Promise((resolve, reject) => {
+    const lib = url.startsWith('https') ? https : http;
+    lib.get(url, { timeout: 8000 }, res => {
+      let d = '';
+      res.on('data', c => d += c);
+      res.on('end', () => { try { resolve(JSON.parse(d)); } catch(e) { resolve(null); } });
+    }).on('error', reject).on('timeout', () => reject(new Error('timeout')));
+  });
 }
 
 // ── Express ───────────────────────────────────────────────
 const app = express();
-
-// Trust Railway proxy
 app.set('trust proxy', true);
-
-app.use(cors({
-  origin: '*',
-  methods: ['GET','POST','OPTIONS'],
-  allowedHeaders: ['*'],
-  credentials: true,
-}));
+app.use(cors({ origin: '*', methods: ['GET','POST','OPTIONS'], allowedHeaders: ['*'], credentials: true }));
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 app.use(express.static(path.join(__dirname, 'public')));
 
-// Paneles
-app.get('/', (req, res) => res.sendFile(path.join(__dirname, 'public', 'mac-panel.html')));
-app.get('/mac-panel', (req, res) => res.sendFile(path.join(__dirname, 'public', 'mac-panel.html')));
-app.get('/ott-panel', (req, res) => res.sendFile(path.join(__dirname, 'public', 'ott-panel.html')));
+// ── Paneles ───────────────────────────────────────────────
+app.get('/',          (req, res) => res.sendFile(path.join(__dirname, 'public', 'panel.html')));
+app.get('/panel',     (req, res) => res.sendFile(path.join(__dirname, 'public', 'panel.html')));
+app.get('/mac-panel', (req, res) => res.sendFile(path.join(__dirname, 'public', 'panel.html')));
 
-// Health check
-app.get('/health', (req, res) => res.json({ ok: true, time: new Date().toISOString(), stalker: 'enabled' }));
+app.get('/health', (req, res) => res.json({ ok: true, time: new Date().toISOString() }));
 
-// Debug endpoint — muestra qué headers manda OTT Navigator
-app.get('/debug-headers', (req, res) => {
-  res.json({
-    headers: req.headers,
-    query: req.query,
-    ip: req.ip,
-  });
-});
-
-// Proxy Xtream
+// ── Proxy para detectar expiry desde el panel ─────────────
 app.get('/proxy', async (req, res) => {
   const targetUrl = req.query.url;
   if (!targetUrl) return res.status(400).json({ error: 'Missing url param' });
@@ -191,288 +125,208 @@ app.get('/proxy', async (req, res) => {
   } catch(e) { res.status(500).json({ error: e.message }); }
 });
 
-// ═══════════════════════════════════════════════════════════
-// STALKER API — Compatible OTT Navigator
-// ═══════════════════════════════════════════════════════════
+// ══════════════════════════════════════════════════════════
+// API DE USUARIOS — Panel CRUD
+// ══════════════════════════════════════════════════════════
 
-// Portal loader — OTT Navigator navega aquí primero
-app.get('/stalker_portal/c', (req, res) => {
-  res.setHeader('Content-Type', 'text/html');
-  res.send('<html><body>FenixTV Portal</body></html>');
-});
-app.get('/stalker_portal/c/', (req, res) => {
-  res.setHeader('Content-Type', 'text/html');
-  res.send('<html><body>FenixTV Portal</body></html>');
+// GET /api/users — listar todos
+app.get('/api/users', async (req, res) => {
+  const data = await fbGet('iptv_users') || {};
+  res.json(data);
 });
 
-// Acepta OPTIONS para CORS preflight
-app.options('/portal.php', (req, res) => {
-  res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Access-Control-Allow-Methods', 'GET,POST,OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', '*');
-  res.status(200).end();
+// POST /api/users — crear usuario
+app.post('/api/users', async (req, res) => {
+  const { username, password, listType, url, xtreamServer, xtreamUser, xtreamPass, expiry, name } = req.body;
+  if (!username || !password) return res.status(400).json({ error: 'username y password requeridos' });
+
+  const existing = await fbGet(`iptv_users/${username}`);
+  if (existing) return res.status(409).json({ error: 'Usuario ya existe' });
+
+  const payload = {
+    username,
+    password,
+    name: name || username,
+    listType: listType || 'm3u',
+    createdAt: Date.now(),
+    active: true,
+  };
+  if (expiry) payload.expiry = new Date(expiry).getTime();
+  if (listType === 'xtream') {
+    payload.xtreamServer = xtreamServer;
+    payload.xtreamUser   = xtreamUser;
+    payload.xtreamPass   = xtreamPass;
+    payload.url = `${xtreamServer}/get.php?username=${xtreamUser}&password=${xtreamPass}&type=m3u_plus`;
+  } else {
+    payload.url = url;
+  }
+
+  await fbSet(`iptv_users/${username}`, payload);
+  res.json({ ok: true, user: payload });
 });
 
-// Handler unificado para GET y POST
-async function portalHandler(req, res) {
-  res.setHeader('Content-Type', 'application/json; charset=utf-8');
-  res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Access-Control-Allow-Headers', '*');
+// PUT /api/users/:username — editar
+app.put('/api/users/:username', async (req, res) => {
+  const { username } = req.params;
+  const existing = await fbGet(`iptv_users/${username}`);
+  if (!existing) return res.status(404).json({ error: 'No existe' });
 
-  const type   = req.query.type   || req.body?.type;
-  const action = req.query.action || req.body?.action;
-
-  console.log(`[PORTAL] ${req.method} type=${type} action=${action}`);
-  console.log(`[PORTAL] Cookie: ${req.headers['cookie']}`);
-  console.log(`[PORTAL] Auth: ${req.headers['authorization']}`);
-  console.log(`[PORTAL] UA: ${req.headers['user-agent']}`);
-
-  // ── HANDSHAKE ───────────────────────────────────────────
-  if (type === 'stb' && action === 'handshake') {
-    // Intentar leer MAC de todas las fuentes
-    const cookie = req.headers['cookie'] || '';
-    const mac =
-      extractMac(cookie) ||
-      extractMac(req.headers['x-real-mac']) ||
-      extractMac(req.headers['x-mac-address']) ||
-      extractMac(req.headers['mac']) ||
-      extractMac(req.query.mac) ||
-      extractMac(req.body?.mac);
-
-    console.log(`[HANDSHAKE] MAC encontrada: ${mac}`);
-
-    if (!mac) {
-      console.log(`[HANDSHAKE] FALLO - headers completos: ${JSON.stringify(req.headers)}`);
-      // Devolver token vacío pero no error, para que OTT Navigator siga intentando
-      return res.json({ js: { token: 'NO_MAC', random: 'abc123' } });
-    }
-
-    // Registrar como pendiente si no tiene lista
-    const device = await getDeviceByMac(mac);
-    if (!device) {
-      const key = macToKey(mac);
-      await fbSet(`pending_macs/${key}`, {
-        mac,
-        deviceId: mac,
-        ts: Date.now(),
-        source: 'OTT Navigator',
-      });
-      console.log(`[HANDSHAKE] MAC nueva registrada en pending_macs: ${mac}`);
+  const { password, listType, url, xtreamServer, xtreamUser, xtreamPass, expiry, name, active } = req.body;
+  const payload = { ...existing };
+  if (password)   payload.password   = password;
+  if (name)       payload.name       = name;
+  if (active !== undefined) payload.active = active;
+  if (expiry)     payload.expiry     = new Date(expiry).getTime();
+  if (listType) {
+    payload.listType = listType;
+    if (listType === 'xtream') {
+      payload.xtreamServer = xtreamServer || existing.xtreamServer;
+      payload.xtreamUser   = xtreamUser   || existing.xtreamUser;
+      payload.xtreamPass   = xtreamPass   || existing.xtreamPass;
+      payload.url = `${payload.xtreamServer}/get.php?username=${payload.xtreamUser}&password=${payload.xtreamPass}&type=m3u_plus`;
     } else {
-      console.log(`[HANDSHAKE] MAC conocida: ${mac} (${device.name || 'sin nombre'})`);
+      payload.url = url || existing.url;
     }
-
-    const token = generateToken(mac);
-    storeToken(mac, token);
-    console.log(`[HANDSHAKE] OK MAC=${mac} token=${token}`);
-
-    return res.json({
-      js: {
-        token,
-        random: Math.random().toString(36).slice(2, 10),
-      }
-    });
+  } else if (url) {
+    payload.url = url;
   }
+  payload.updatedAt = Date.now();
 
-  // ── GET PROFILE ─────────────────────────────────────────
-  if (type === 'stb' && action === 'get_profile') {
-    const mac = getMacFromRequest(req);
-    console.log(`[GET_PROFILE] MAC=${mac}`);
-    if (!mac) return res.json({ js: { error: 'no auth: no handshake' } });
+  await fbSet(`iptv_users/${username}`, payload);
+  res.json({ ok: true, user: payload });
+});
 
-    const device = await getDeviceByMac(mac);
-    const hasService = !!(device && device.url);
-    const expiry = device?.expiry ? Math.floor(device.expiry / 1000) : 0;
+// DELETE /api/users/:username
+app.delete('/api/users/:username', async (req, res) => {
+  await fbDelete(`iptv_users/${req.params.username}`);
+  res.json({ ok: true });
+});
 
-    return res.json({
-      js: {
-        id: '1',
-        name: device?.name || mac,
-        status: hasService ? 'Active' : 'Inactive',
-        exp_date: expiry ? String(expiry) : '0',
-        is_trial: '0',
-        active_cons: '1',
-        max_connections: '1',
-        created_at: String(Math.floor(Date.now() / 1000) - 86400),
-        updated_at: String(Math.floor(Date.now() / 1000)),
-        mac,
-        fname: device?.name || '',
-        login: mac,
-        password: '',
-        parentalPasswd: '0000',
-        theme: 'default',
-        play_token: '',
-        additional_services_on: '0',
-        default_lang: 'es',
-        stb_lang: 'es',
-        timezone: 'America/Argentina/Buenos_Aires',
-        locale: 'es_ES',
-        tariff_plan_id: '1',
-        tariff_plan: 'Basic',
-        keep_alive: '1',
-        disabled: '0',
-        blocked: '0',
-        hotline_enabled: '0',
-        phone: '',
-        sname: 'FenixTV',
-        mparent_id: '1',
-        casystem_id: '0',
-        force_ch_link_check: '0',
-        fav_itv_on: '1',
-        now_playing_start: '0',
-        now_playing_type: '0',
-        now_playing_content: '0',
-        ip: req.ip || '',
-        image_version: '218',
-        stb_type: 'MAG250',
-        hd: '1',
-        main_notify: '0',
-        operator_name: 'FenixTV',
-        service_introduction: '0',
-        show_tv_only_by_name: '0',
-        restricted_search: '0',
-      }
-    });
-  }
+// ══════════════════════════════════════════════════════════
+// XTREAM CODES API — Lo que la app usa para conectarse
+// ══════════════════════════════════════════════════════════
+// La app pone:
+//   Servidor: https://tu-railway.app
+//   Usuario: el username creado en el panel
+//   Contraseña: el password del usuario
+//
+// Endpoints que IPTV Smarters usa:
+//   GET /player_api.php?username=X&password=Y&action=get_live_streams
+//   GET /get.php?username=X&password=Y&type=m3u_plus
+//   GET /xmltv.php?username=X&password=Y (EPG, opcional)
 
-  // ── GET GENRES / CATEGORÍAS ─────────────────────────────
-  if (type === 'itv' && action === 'get_genres') {
-    return res.json({
-      js: [
-        { id: '*', title: 'Todos', alias: 'all', censored: '0' },
-        { id: '1', title: 'General', alias: 'general', censored: '0' },
-        { id: '2', title: 'Deportes', alias: 'sports', censored: '0' },
-        { id: '3', title: 'Noticias', alias: 'news', censored: '0' },
-      ]
-    });
-  }
-
-  // ── GET ALL CHANNELS ─────────────────────────────────────
-  if (type === 'itv' && action === 'get_all_channels') {
-    const mac = getMacFromRequest(req);
-    console.log(`[GET_CHANNELS] MAC=${mac}`);
-    if (!mac) return res.json({ js: { total_items: 0, max_page_items: 0, selected_item: 0, data: [] } });
-
-    const device = await getDeviceByMac(mac);
-    if (!device || !device.url) {
-      console.log(`[GET_CHANNELS] Sin lista para MAC=${mac}`);
-      return res.json({ js: { total_items: 0, max_page_items: 0, selected_item: 0, data: [] } });
-    }
-
-    // Xtream: traer canales del proveedor
-    if (device.listType === 'xtream' && device.xtreamServer && device.xtreamUser && device.xtreamPass) {
-      try {
-        const apiUrl = `${device.xtreamServer}/player_api.php?username=${device.xtreamUser}&password=${device.xtreamPass}&action=get_live_streams`;
-        const data = await fetchExternal(apiUrl);
-        if (Array.isArray(data)) {
-          const channels = data.map((ch, i) => ({
-            id: String(ch.stream_id || i + 1),
-            name: ch.name || `Canal ${i + 1}`,
-            number: String(i + 1),
-            cmd: `ffmpeg ${device.xtreamServer}/live/${device.xtreamUser}/${device.xtreamPass}/${ch.stream_id}.m3u8`,
-            genres_id: String(ch.category_id || '1'),
-            tv_genre_id: String(ch.category_id || '1'),
-            logo: ch.stream_icon || '',
-            epg_id: '',
-            censored: '0',
-            allow_pvr: '0',
-            hd: '1',
-            xmltv_id: '',
-            time_shift_on: '0',
-            use_http_tmp_link: '0',
-            aspect: '16:9',
-          }));
-          return res.json({ js: { total_items: channels.length, max_page_items: channels.length, selected_item: 0, data: channels } });
-        }
-      } catch(e) {
-        console.error('[GET_CHANNELS] Xtream error:', e.message);
-      }
-    }
-
-    // M3U: canal único que apunta a la URL
-    const channel = {
-      id: '1',
-      name: device.name || 'Mi Lista',
-      number: '1',
-      cmd: `ffmpeg ${device.url}`,
-      genres_id: '1',
-      tv_genre_id: '1',
-      logo: '',
-      epg_id: '',
-      censored: '0',
-      allow_pvr: '0',
-      hd: '1',
-      xmltv_id: '',
-      time_shift_on: '0',
-      use_http_tmp_link: '0',
-      aspect: '16:9',
-    };
-    return res.json({ js: { total_items: 1, max_page_items: 1, selected_item: 0, data: [channel] } });
-  }
-
-  // ── CREATE LINK ──────────────────────────────────────────
-  if (type === 'itv' && action === 'create_link') {
-    const mac = getMacFromRequest(req);
-    if (!mac) return res.json({ js: { cmd: '', error: 'no auth' } });
-
-    const device = await getDeviceByMac(mac);
-    if (!device || !device.url) return res.json({ js: { cmd: '', error: 'no list' } });
-
-    const cmd = req.query.cmd || req.body?.cmd || '';
-    // Si cmd es una URL completa la usamos, si no usamos la URL del dispositivo
-    let streamUrl = cmd.startsWith('ffmpeg ') ? cmd.replace('ffmpeg ', '') : (cmd.startsWith('http') ? cmd : device.url);
-    console.log(`[CREATE_LINK] MAC=${mac} url=${streamUrl}`);
-
-    return res.json({ js: { cmd: `ffmpeg ${streamUrl}`, id: '1' } });
-  }
-
-  // ── VOD ──────────────────────────────────────────────────
-  if (type === 'vod') {
-    if (action === 'get_categories') return res.json({ js: [] });
-    if (action === 'get_ordered_list') return res.json({ js: { total_items: 0, max_page_items: 0, selected_item: 0, data: [] } });
-    return res.json({ js: [] });
-  }
-
-  // ── SERIES ───────────────────────────────────────────────
-  if (type === 'series') {
-    return res.json({ js: { total_items: 0, max_page_items: 0, selected_item: 0, data: [] } });
-  }
-
-  // ── FAVORITOS ────────────────────────────────────────────
-  if (action === 'get_all_fav_itv' || action === 'get_fav_itv') {
-    return res.json({ js: [] });
-  }
-
-  // ── EPG ──────────────────────────────────────────────────
-  if (type === 'epg' || action === 'get_simple_data_table' || action === 'get_epg_info') {
-    return res.json({ js: { data: [] } });
-  }
-
-  // Fallback
-  console.log(`[PORTAL] No handler for type=${type} action=${action}`);
-  return res.json({ js: {} });
+async function getUser(username, password) {
+  const user = await fbGet(`iptv_users/${username}`);
+  if (!user) return null;
+  if (user.password !== password) return null;
+  if (!user.active) return null;
+  if (user.expiry && user.expiry < Date.now()) return null;
+  return user;
 }
 
-app.get('/portal.php', portalHandler);
-app.post('/portal.php', portalHandler);
+// player_api.php — endpoint principal de Xtream
+app.get('/player_api.php', async (req, res) => {
+  res.setHeader('Content-Type', 'application/json');
+  const { username, password, action } = req.query;
 
-// ── Helper fetch externo ──────────────────────────────────
-function fetchExternal(url) {
-  return new Promise((resolve, reject) => {
-    const lib = url.startsWith('https') ? https : http;
-    lib.get(url, { timeout: 8000 }, res => {
-      let d = '';
-      res.on('data', c => d += c);
-      res.on('end', () => { try { resolve(JSON.parse(d)); } catch(e) { resolve(null); } });
-    }).on('error', reject).on('timeout', () => reject(new Error('timeout')));
-  });
-}
+  const user = await getUser(username, password);
+  if (!user) {
+    return res.json({ user_info: { auth: 0 }, server_info: {} });
+  }
+
+  const expDate = user.expiry ? Math.floor(user.expiry / 1000) : 0;
+  const userInfo = {
+    auth: 1,
+    username,
+    password,
+    message: '',
+    exp_date: expDate ? String(expDate) : '0',
+    is_trial: '0',
+    active_cons: '1',
+    created_at: String(Math.floor((user.createdAt || Date.now()) / 1000)),
+    max_connections: '1',
+    allowed_output_formats: ['m3u8', 'ts', 'rtmp'],
+    status: 'Active',
+  };
+
+  const serverInfo = {
+    url: req.hostname,
+    port: '80',
+    https_port: '443',
+    server_protocol: 'https',
+    rtmp_port: '1935',
+    timezone: 'America/Argentina/Buenos_Aires',
+    timestamp_now: Math.floor(Date.now() / 1000),
+    time_now: new Date().toISOString(),
+  };
+
+  // Sin action = info del usuario (lo que pide la app al hacer login)
+  if (!action) {
+    return res.json({ user_info: userInfo, server_info: serverInfo });
+  }
+
+  // ── Si el usuario tiene Xtream propio, hacer proxy ───────
+  if (user.listType === 'xtream' && user.xtreamServer) {
+    const proxyUrl = `${user.xtreamServer}/player_api.php?username=${user.xtreamUser}&password=${user.xtreamPass}&action=${action}${req.query.category_id ? '&category_id='+req.query.category_id : ''}${req.query.stream_id ? '&stream_id='+req.query.stream_id : ''}`;
+    try {
+      const data = await fetchExternal(proxyUrl);
+      if (data) return res.json(data);
+    } catch(e) {}
+  }
+
+  // ── Si tiene URL M3U — respuestas básicas ────────────────
+  if (action === 'get_live_categories') return res.json([{ category_id: '1', category_name: 'Lista IPTV', parent_id: 0 }]);
+  if (action === 'get_live_streams') {
+    return res.json([{
+      num: 1, name: 'Lista IPTV', stream_type: 'live',
+      stream_id: 1, stream_icon: '',
+      epg_channel_id: '', added: '', category_id: '1',
+      custom_sid: '', tv_archive: 0, direct_source: user.url || '',
+      tv_archive_duration: 0,
+    }]);
+  }
+  if (action === 'get_vod_categories')    return res.json([]);
+  if (action === 'get_vod_streams')       return res.json([]);
+  if (action === 'get_series_categories') return res.json([]);
+  if (action === 'get_series')            return res.json([]);
+
+  return res.json({ user_info: userInfo, server_info: serverInfo });
+});
+
+// get.php — devuelve M3U directamente
+app.get('/get.php', async (req, res) => {
+  const { username, password, type } = req.query;
+  const user = await getUser(username, password);
+  if (!user) return res.status(401).send('#EXTM3U\n# Auth failed');
+
+  if (!user.url) return res.status(404).send('#EXTM3U\n# No list assigned');
+
+  // Si tiene Xtream propio, redirigir al M3U del proveedor
+  if (user.listType === 'xtream' && user.xtreamServer) {
+    const m3uUrl = `${user.xtreamServer}/get.php?username=${user.xtreamUser}&password=${user.xtreamPass}&type=${type||'m3u_plus'}`;
+    return res.redirect(302, m3uUrl);
+  }
+
+  // Si tiene URL M3U directa, redirigir
+  return res.redirect(302, user.url);
+});
+
+// xmltv.php — EPG (redirigir o vacío)
+app.get('/xmltv.php', async (req, res) => {
+  const { username, password } = req.query;
+  const user = await getUser(username, password);
+  if (!user) return res.status(401).send('');
+  if (user.listType === 'xtream' && user.xtreamServer) {
+    return res.redirect(302, `${user.xtreamServer}/xmltv.php?username=${user.xtreamUser}&password=${user.xtreamPass}`);
+  }
+  res.setHeader('Content-Type', 'application/xml');
+  res.send('<?xml version="1.0" encoding="UTF-8"?><tv></tv>');
+});
 
 // ── Start ─────────────────────────────────────────────────
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
-  console.log(`FenixTV Panel corriendo en puerto ${PORT}`);
-  console.log(`Stalker API: /portal.php`);
-  console.log(`Debug headers: /debug-headers`);
-  console.log(`Portal OTT: /stalker_portal/c/`);
+  console.log(`Panel IPTV corriendo en puerto ${PORT}`);
+  console.log(`Xtream API: /player_api.php`);
+  console.log(`M3U: /get.php`);
 });
