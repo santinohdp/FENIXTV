@@ -103,6 +103,10 @@ app.set('trust proxy', true);
 app.use(cors({ origin: '*', methods: ['GET','POST','OPTIONS'], allowedHeaders: ['*'], credentials: true }));
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
+app.use((req, res, next) => {
+  console.log(`[REQ] ${req.method} ${req.path} | query: ${JSON.stringify(req.query)} | body: ${JSON.stringify(req.body)}`);
+  next();
+});
 app.use(express.static(path.join(__dirname, 'public')));
 
 // ── Paneles ───────────────────────────────────────────────
