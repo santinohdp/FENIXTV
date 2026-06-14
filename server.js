@@ -37,7 +37,10 @@ async function fbGet(nodePath) {
       let data = '';
       res.on('data', c => data += c);
       res.on('end', () => {
-        try { resolve(JSON.parse(data)); }
+        try {
+          const parsed = JSON.parse(data);
+          resolve(parsed === null ? null : parsed);
+        }
         catch(e) { resolve(null); }
       });
     }).on('error', e => { console.error('fbGet error:', e.message); resolve(null); });
@@ -141,7 +144,7 @@ app.post('/api/users', async (req, res) => {
   if (!username || !password) return res.status(400).json({ error: 'username y password requeridos' });
 
   const existing = await fbGet(`iptv_users/${username}`);
-  if (existing) return res.status(409).json({ error: 'Usuario ya existe' });
+  if (existing !== null && existing !== undefined) return res.status(409).json({ error: 'Usuario ya existe' });
 
   const payload = {
     username,
