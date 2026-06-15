@@ -22,7 +22,7 @@ const fbApp = initializeApp(firebaseConfig);
 const auth  = getAuth(fbApp);
 const db    = getDatabase(fbApp);
 
-const BASE = 'https://streamflix-production-9559.up.railway.app';
+const BASE = 'https://fenix.dpdns.org';
 
 function $i(id){ return document.getElementById(id); }
 function toast(msg, err=false){
@@ -479,7 +479,7 @@ tr:last-child td{border-bottom:none;}
 <div class="mo" id="srvModal">
   <div class="srvbox">
     <div class="mh" style="margin-bottom:16px;"><h3 style="color:var(--gn);">📡 Datos de conexión para la app</h3><button class="mclose" onclick="closeSrvModal()">✕</button></div>
-    <div class="srvrow"><div class="srvlabel">Servidor (URL del portal)</div><div class="srvval">https://streamflix-production-9559.up.railway.app</div></div>
+    <div class="srvrow"><div class="srvlabel">Servidor (URL del portal)</div><div class="srvval">https://fenix.dpdns.org</div></div>
     <div class="srvrow"><div class="srvlabel">Usuario</div><div class="srvval">el username que creaste en el panel</div></div>
     <div class="srvrow"><div class="srvlabel">Contraseña</div><div class="srvval">la contraseña que creaste en el panel</div></div>
     <div class="srvnote">
