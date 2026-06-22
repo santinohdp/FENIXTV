@@ -75,7 +75,7 @@ function fetchExternal(url) {
 // ── Express ───────────────────────────────────────────────
 const app = express();
 app.set('trust proxy', true);
-app.use(cors({ origin: '*', methods: ['GET','POST','OPTIONS'], allowedHeaders: ['*'], credentials: true }));
+app.use(cors({ origin: '*', methods: ['GET','POST','PUT','DELETE','OPTIONS'], allowedHeaders: ['*'], credentials: true }));
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 app.use((req, res, next) => {
@@ -89,6 +89,11 @@ app.get('/',          (req, res) => res.sendFile(path.join(__dirname, 'public', 
 app.get('/panel',     (req, res) => res.sendFile(path.join(__dirname, 'public', 'panel.html')));
 app.get('/mac-panel', (req, res) => res.sendFile(path.join(__dirname, 'public', 'panel.html')));
 app.get('/health',    (req, res) => res.json({ ok: true, time: new Date().toISOString() }));
+
+// ── DNS endpoint para la app ──────────────────────────────
+app.post('/dns', (req, res) => {
+  res.json({ url: "https://fenix.dpdns.org/api/" });
+});
 
 // ── Proxy para detectar expiry ────────────────────────────
 app.get('/proxy', async (req, res) => {
