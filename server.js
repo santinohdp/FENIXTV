@@ -90,26 +90,37 @@ app.get('/panel',     (req, res) => res.sendFile(path.join(__dirname, 'public', 
 app.get('/mac-panel', (req, res) => res.sendFile(path.join(__dirname, 'public', 'panel.html')));
 app.get('/health',    (req, res) => res.json({ ok: true, time: new Date().toISOString() }));
 
-// ── DNS endpoint para la app ──────────────────────────────
-app.post('/api/dns', async (req, res) => {
-  console.log('[DNS] body:', JSON.stringify(req.body));
+// ── DNS endpoint para la app (IPTV Smarters format) ──────
+app.post(`/api/dns`, async (req, res) => {
+  console.log(`[DNS] body:`, JSON.stringify(req.body));
   const { u } = req.body;
   const user = u ? await fbGet(`iptv_users/${u}`) : null;
+  const now = Math.floor(Date.now() / 1000);
+  const expDate = user?.expiry ? Math.floor(user.expiry / 1000) : 0;
   const response = {
     url: "https://fenix.dpdns.org/api/",
-    status: user ? "active" : "trial",
+    status: user ? "Active" : "Inactive",
     auth: user ? 1 : 0,
     code: 0,
     msg: "success",
-    activate: user ? 1 : 0,
-    isfreetrial: 0,
+    note: "",
     username: u || "",
-    exp_date: user?.expiry ? String(Math.floor(user.expiry / 1000)) : "0",
-    note: ""
+    password: user?.password || "",
+    exp_date: expDate ? String(expDate) : "0",
+    is_trial: 0,
+    active_cons: "1",
+    max_connections: "1",
+    allowed_output_formats: ["m3u8", "ts"],
+    created_at: user?.createdAt ? String(Math.floor(user.createdAt / 1000)) : String(now),
+    regdate: user?.createdAt ? String(Math.floor(user.createdAt / 1000)) : String(now),
+    next_due_date: expDate ? String(expDate) : "0",
+    activation_code: "",
+    act_code: ""
   };
-  console.log('[DNS] respondiendo:', JSON.stringify(response));
+  console.log(`[DNS] respondiendo:`, JSON.stringify(response));
   res.json(response);
 });
+
 // ── Proxy para detectar expiry ────────────────────────────
 app.get('/proxy', async (req, res) => {
   const targetUrl = req.query.url;
