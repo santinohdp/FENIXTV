@@ -92,7 +92,10 @@ app.get('/health',    (req, res) => res.json({ ok: true, time: new Date().toISOS
 
 // ── DNS endpoint para la app ──────────────────────────────
 app.post('/api/dns', (req, res) => {
-  res.json({ url: "https://fenix.dpdns.org/api/" });
+  console.log('[DNS] body:', JSON.stringify(req.body));
+  const response = { url: "https://fenix.dpdns.org/api/" };
+  console.log('[DNS] respondiendo:', JSON.stringify(response));
+  res.json(response);
 });
 
 // ── Proxy para detectar expiry ────────────────────────────
