@@ -91,10 +91,18 @@ app.get('/mac-panel', (req, res) => res.sendFile(path.join(__dirname, 'public', 
 app.get('/health',    (req, res) => res.json({ ok: true, time: new Date().toISOString() }));
 
 // ── DNS endpoint para la app ──────────────────────────────
-app.post('/api/dns', (req, res) => {
-  console.log('[DNS] body:', JSON.stringify(req.body));
-  const response = { url: "https://fenix.dpdns.org/api/" };
-  console.log('[DNS] respondiendo:', JSON.stringify(response));
+app.post(`/api/dns`, async (req, res) => {
+  console.log(`[DNS] body:`, JSON.stringify(req.body));
+  const { u } = req.body;
+  const user = u ? await fbGet(`iptv_users/${u}`) : null;
+  const response = {
+    url: "https://fenix.dpdns.org/api/",
+    status: user ? "active" : "trial",
+    auth: user ? 1 : 0,
+    username: u || "",
+    exp_date: user?.expiry ? String(Math.floor(user.expiry / 1000)) : "0"
+  };
+  console.log(`[DNS] respondiendo:`, JSON.stringify(response));
   res.json(response);
 });
 
