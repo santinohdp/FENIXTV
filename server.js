@@ -91,8 +91,8 @@ app.get('/mac-panel', (req, res) => res.sendFile(path.join(__dirname, 'public', 
 app.get('/health',    (req, res) => res.json({ ok: true, time: new Date().toISOString() }));
 
 // ── DNS endpoint para la app ──────────────────────────────
-app.post(`/api/dns`, async (req, res) => {
-  console.log(`[DNS] body:`, JSON.stringify(req.body));
+app.post('/api/dns', async (req, res) => {
+  console.log('[DNS] body:', JSON.stringify(req.body));
   const { u } = req.body;
   const user = u ? await fbGet(`iptv_users/${u}`) : null;
   const response = {
@@ -101,13 +101,15 @@ app.post(`/api/dns`, async (req, res) => {
     auth: user ? 1 : 0,
     code: 0,
     msg: "success",
+    activate: user ? 1 : 0,
+    isfreetrial: 0,
     username: u || "",
-    exp_date: user?.expiry ? String(Math.floor(user.expiry / 1000)) : "0"
+    exp_date: user?.expiry ? String(Math.floor(user.expiry / 1000)) : "0",
+    note: ""
   };
-  console.log(`[DNS] respondiendo:`, JSON.stringify(response));
+  console.log('[DNS] respondiendo:', JSON.stringify(response));
   res.json(response);
 });
-
 // ── Proxy para detectar expiry ────────────────────────────
 app.get('/proxy', async (req, res) => {
   const targetUrl = req.query.url;
