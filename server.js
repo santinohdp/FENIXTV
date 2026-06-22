@@ -91,7 +91,7 @@ app.get('/mac-panel', (req, res) => res.sendFile(path.join(__dirname, 'public', 
 app.get('/health',    (req, res) => res.json({ ok: true, time: new Date().toISOString() }));
 
 // ── DNS endpoint para la app ──────────────────────────────
-app.post('/dns', (req, res) => {
+app.post('/api/dns', (req, res) => {
   res.json({ url: "https://fenix.dpdns.org/api/" });
 });
 
