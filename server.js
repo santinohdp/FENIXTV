@@ -99,6 +99,8 @@ app.post(`/api/dns`, async (req, res) => {
     url: "https://fenix.dpdns.org/api/",
     status: user ? "active" : "trial",
     auth: user ? 1 : 0,
+    code: 0,
+    msg: "success",
     username: u || "",
     exp_date: user?.expiry ? String(Math.floor(user.expiry / 1000)) : "0"
   };
