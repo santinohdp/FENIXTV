@@ -272,9 +272,28 @@ async function streamProxy(req, res, type) {
   if (!user) return res.status(401).end();
   if (user.listType === 'xtream' && user.xtreamServer) {
     const ext = streamId.includes('.') ? '' : (type === 'live' ? '.m3u8' : '');
-    return res.redirect(302, `${user.xtreamServer}/${type}/${user.xtreamUser}/${user.xtreamPass}/${streamId}${ext}`);
+    const targetUrl = `${user.xtreamServer}/${type}/${user.xtreamUser}/${user.xtreamPass}/${streamId}${ext}`;
+    try {
+      const lib = targetUrl.startsWith('https') ? https : http;
+      const proxyReq = lib.get(targetUrl, { timeout: 10000 }, (proxyRes) => {
+        res.setHeader('Access-Control-Allow-Origin', '*');
+        res.setHeader('Content-Type', proxyRes.headers['content-type'] || 'video/mp4');
+        if (proxyRes.headers['content-length']) res.setHeader('Content-Length', proxyRes.headers['content-length']);
+        if (proxyRes.headers['content-range'])  res.setHeader('Content-Range',  proxyRes.headers['content-range']);
+        res.setHeader('Accept-Ranges', 'bytes');
+        res.statusCode = proxyRes.statusCode;
+        proxyRes.pipe(res);
+      });
+      proxyReq.on('error', (e) => {
+        console.error('stream proxy error:', e.message);
+        if (!res.headersSent) res.status(500).end();
+      });
+    } catch(e) {
+      if (!res.headersSent) res.status(500).end();
+    }
+  } else {
+    res.status(404).end();
   }
-  res.status(404).end();
 }
 
 app.get('/live/:username/:password/:streamId',   (req, res) => streamProxy(req, res, 'live'));
