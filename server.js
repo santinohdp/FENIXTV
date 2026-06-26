@@ -72,6 +72,46 @@ function fetchExternal(url) {
   });
 }
 
+function pipeStream(targetUrl, req, res, redirectCount) {
+  if (redirectCount > 5) return res.status(500).end();
+  const urlObj = new URL(targetUrl);
+  const lib = urlObj.protocol === 'https:' ? https : http;
+  const options = {
+    hostname: urlObj.hostname,
+    port: urlObj.port || (urlObj.protocol === 'https:' ? 443 : 80),
+    path: urlObj.pathname + urlObj.search,
+    method: 'GET',
+    headers: {
+      'User-Agent': 'Mozilla/5.0',
+      'Range': req.headers['range'] || '',
+    },
+    timeout: 15000,
+  };
+  const proxyReq = lib.request(options, (proxyRes) => {
+    if ([301,302,303,307,308].includes(proxyRes.statusCode) && proxyRes.headers['location']) {
+      const location = proxyRes.headers['location'];
+      const nextUrl = location.startsWith('http') ? location : new URL(location, targetUrl).href;
+      return pipeStream(nextUrl, req, res, redirectCount + 1);
+    }
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.setHeader('Content-Type', proxyRes.headers['content-type'] || 'video/mp4');
+    if (proxyRes.headers['content-length']) res.setHeader('Content-Length', proxyRes.headers['content-length']);
+    if (proxyRes.headers['content-range'])  res.setHeader('Content-Range',  proxyRes.headers['content-range']);
+    res.setHeader('Accept-Ranges', 'bytes');
+    res.statusCode = proxyRes.statusCode;
+    proxyRes.pipe(res);
+  });
+  proxyReq.on('error', (e) => {
+    console.error('pipeStream error:', e.message);
+    if (!res.headersSent) res.status(500).end();
+  });
+  proxyReq.on('timeout', () => {
+    proxyReq.destroy();
+    if (!res.headersSent) res.status(504).end();
+  });
+  proxyReq.end();
+}
+
 // ── Express ───────────────────────────────────────────────
 const app = express();
 app.set('trust proxy', true);
@@ -92,7 +132,6 @@ app.get('/health',    (req, res) => res.json({ ok: true, time: new Date().toISOS
 
 // ── DNS endpoint para la app (IPTV Smarters format) ──────
 app.post(`/api/dns`, async (req, res) => {
-  console.log(`[DNS] body:`, JSON.stringify(req.body));
   const { u } = req.body;
   const user = u ? await fbGet(`iptv_users/${u}`) : null;
   const now = Math.floor(Date.now() / 1000);
@@ -101,23 +140,17 @@ app.post(`/api/dns`, async (req, res) => {
     url: "https://fenix.dpdns.org/api/",
     status: user ? "Active" : "Inactive",
     auth: user ? 1 : 0,
-    code: 0,
-    msg: "success",
-    note: "",
+    code: 0, msg: "success", note: "",
     username: u || "",
     password: user?.password || "",
     exp_date: expDate ? String(expDate) : "0",
-    is_trial: 0,
-    active_cons: "1",
-    max_connections: "1",
+    is_trial: 0, active_cons: "1", max_connections: "1",
     allowed_output_formats: ["m3u8", "ts"],
     created_at: user?.createdAt ? String(Math.floor(user.createdAt / 1000)) : String(now),
     regdate: user?.createdAt ? String(Math.floor(user.createdAt / 1000)) : String(now),
     next_due_date: expDate ? String(expDate) : "0",
-    activation_code: "",
-    act_code: ""
+    activation_code: "", act_code: ""
   };
-  console.log(`[DNS] respondiendo:`, JSON.stringify(response));
   res.json(response);
 });
 
@@ -201,7 +234,6 @@ async function getUser(username, password) {
   return user;
 }
 
-// player_api.php
 app.get('/player_api.php', async (req, res) => {
   res.setHeader('Content-Type', 'application/json');
   const { username, password, action } = req.query;
@@ -224,7 +256,6 @@ app.get('/player_api.php', async (req, res) => {
 
   if (!action) return res.json({ user_info: userInfo, server_info: serverInfo });
 
-  // Proxy a Xtream del proveedor
   if (user.listType === 'xtream' && user.xtreamServer) {
     const extra = (req.query.category_id ? '&category_id='+req.query.category_id : '')
                 + (req.query.stream_id   ? '&stream_id='+req.query.stream_id     : '')
@@ -236,13 +267,8 @@ app.get('/player_api.php', async (req, res) => {
     } catch(e) { console.error('proxy error:', e.message); }
   }
 
-  // Fallback M3U
   if (action === 'get_live_categories')   return res.json([{ category_id: '1', category_name: 'Lista IPTV', parent_id: 0 }]);
-  if (action === 'get_live_streams')      return res.json([{
-    num: 1, name: 'Lista IPTV', stream_type: 'live', stream_id: 1, stream_icon: '',
-    epg_channel_id: '', added: '', category_id: '1', custom_sid: '',
-    tv_archive: 0, direct_source: user.url || '', tv_archive_duration: 0,
-  }]);
+  if (action === 'get_live_streams')      return res.json([]);
   if (action === 'get_vod_categories')    return res.json([]);
   if (action === 'get_vod_streams')       return res.json([]);
   if (action === 'get_series_categories') return res.json([]);
@@ -253,7 +279,6 @@ app.get('/player_api.php', async (req, res) => {
   return res.json({ user_info: userInfo, server_info: serverInfo });
 });
 
-// get.php — M3U directo
 app.get('/get.php', async (req, res) => {
   const { username, password, type } = req.query;
   const user = await getUser(username, password);
@@ -265,7 +290,7 @@ app.get('/get.php', async (req, res) => {
   return res.redirect(302, user.url);
 });
 
-// ── Proxy de streams (live, movie, series) ────────────────
+// ── Proxy de streams con seguimiento de redirects ────────
 async function streamProxy(req, res, type) {
   const { username, password, streamId } = req.params;
   const user = await getUser(username, password);
@@ -273,24 +298,7 @@ async function streamProxy(req, res, type) {
   if (user.listType === 'xtream' && user.xtreamServer) {
     const ext = streamId.includes('.') ? '' : (type === 'live' ? '.m3u8' : '');
     const targetUrl = `${user.xtreamServer}/${type}/${user.xtreamUser}/${user.xtreamPass}/${streamId}${ext}`;
-    try {
-      const lib = targetUrl.startsWith('https') ? https : http;
-      const proxyReq = lib.get(targetUrl, { timeout: 10000 }, (proxyRes) => {
-        res.setHeader('Access-Control-Allow-Origin', '*');
-        res.setHeader('Content-Type', proxyRes.headers['content-type'] || 'video/mp4');
-        if (proxyRes.headers['content-length']) res.setHeader('Content-Length', proxyRes.headers['content-length']);
-        if (proxyRes.headers['content-range'])  res.setHeader('Content-Range',  proxyRes.headers['content-range']);
-        res.setHeader('Accept-Ranges', 'bytes');
-        res.statusCode = proxyRes.statusCode;
-        proxyRes.pipe(res);
-      });
-      proxyReq.on('error', (e) => {
-        console.error('stream proxy error:', e.message);
-        if (!res.headersSent) res.status(500).end();
-      });
-    } catch(e) {
-      if (!res.headersSent) res.status(500).end();
-    }
+    pipeStream(targetUrl, req, res, 0);
   } else {
     res.status(404).end();
   }
@@ -300,7 +308,6 @@ app.get('/live/:username/:password/:streamId',   (req, res) => streamProxy(req, 
 app.get('/movie/:username/:password/:streamId',  (req, res) => streamProxy(req, res, 'movie'));
 app.get('/series/:username/:password/:streamId', (req, res) => streamProxy(req, res, 'series'));
 
-// xmltv.php — EPG
 app.get('/xmltv.php', async (req, res) => {
   const { username, password } = req.query;
   const user = await getUser(username, password);
@@ -312,10 +319,7 @@ app.get('/xmltv.php', async (req, res) => {
   res.send('<?xml version="1.0" encoding="UTF-8"?><tv></tv>');
 });
 
-// ── Start ─────────────────────────────────────────────────
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log(`Panel IPTV corriendo en puerto ${PORT}`);
-  console.log(`Xtream API: /player_api.php`);
-  console.log(`M3U: /get.php`);
 });
