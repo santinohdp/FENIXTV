@@ -22,7 +22,9 @@ const fbApp = initializeApp(firebaseConfig);
 const auth  = getAuth(fbApp);
 const db    = getDatabase(fbApp);
 
-const BASE = 'https://fenix.dpdns.org';
+// FIX: BASE vacío = usa el mismo dominio donde está alojado el panel (Render).
+// Así nunca vuelve a romperse aunque cambies de dominio en el futuro.
+const BASE = '';
 
 function $i(id){ return document.getElementById(id); }
 function toast(msg, err=false){
@@ -132,7 +134,7 @@ function renderUsers(data){
 }
 
 window.copyLogin = function(user, pass){
-  const SERVER = BASE;
+  const SERVER = location.origin;
   const txt = `Servidor: ${SERVER}\nUsuario: ${user}\nContraseña: ${pass}`;
   navigator.clipboard.writeText(txt).then(()=>toast('Datos copiados al portapapeles'));
 };
@@ -279,6 +281,7 @@ window.switchTab = function(t){
 
 // ── Info del servidor ──────────────────────────────────────
 window.showServerInfo = function(){
+  $i('srvVal').textContent = location.origin;
   $i('srvModal').style.display='flex';
 };
 window.closeSrvModal = ()=> $i('srvModal').style.display='none';
@@ -399,97 +402,4 @@ tr:last-child td{border-bottom:none;}
       <button class="btn" onclick="doLogin()">Entrar →</button>
     </div>
     <div class="lform" id="form_reg">
-      <div style="background:rgba(255,79,0,.08);border:1px solid rgba(255,79,0,.25);padding:10px 13px;font-size:12px;color:var(--ac2);margin-bottom:14px;">⚠️ Solo se puede crear <strong>un administrador</strong>.</div>
-      <div class="fg"><label>Email</label><input type="email" id="rEmail" placeholder="admin@email.com"></div>
-      <div class="fg"><label>Contraseña</label><input type="password" id="rPass" placeholder="mínimo 6 caracteres"></div>
-      <div class="fg"><label>Confirmar</label><input type="password" id="rPass2" placeholder="repetir contraseña"></div>
-      <button class="btn" onclick="doRegister()">Crear cuenta →</button>
-    </div>
-  </div>
-</div>
-
-<!-- APP -->
-<div id="appScreen">
-  <div class="topbar">
-    <div class="tlogo">IPTV <span>PANEL</span></div>
-    <div class="tright">
-      <button class="btn-srv" onclick="showServerInfo()">📡 Datos de conexión</button>
-      <span id="userEmail"></span>
-      <button class="btn-out" onclick="doLogout()">Salir</button>
-    </div>
-  </div>
-  <div class="content">
-    <div class="stats">
-      <div class="sc"><div style="font-size:26px;">👤</div><div><div class="sv" id="statTotal">0</div><div class="sl">Usuarios</div></div></div>
-      <div class="sc"><div style="font-size:26px;">✅</div><div><div class="sv" id="statActive">0</div><div class="sl">Activos</div></div></div>
-      <div class="sc"><div style="font-size:26px;">📡</div><div><div class="sv" style="color:var(--gn);font-size:18px;">ONLINE</div><div class="sl">Servidor</div></div></div>
-    </div>
-    <div class="sh"><h2>Usuarios registrados</h2><button class="btn-add" onclick="openAdd()">+ Agregar</button></div>
-    <div class="tw"><table>
-      <thead><tr><th>Usuario</th><th>Contraseña</th><th>Tipo</th><th>Vence</th><th>Estado</th><th>Acciones</th></tr></thead>
-      <tbody id="tBody"><tr><td colspan="6" class="empty">Cargando...</td></tr></tbody>
-    </table></div>
-  </div>
-</div>
-
-<!-- MODAL USUARIO -->
-<div class="mo" id="modal">
-  <div class="mb">
-    <div class="mh"><h3 id="mTitle">Agregar usuario</h3><button class="mclose" onclick="closeModal()">✕</button></div>
-    <div class="fg"><label>Usuario (login en la app)</label><input type="text" id="mUsername" placeholder="ej. juan123" autocomplete="off"></div>
-    <div class="fg">
-      <label>Contraseña</label>
-      <div class="fp">
-        <input type="text" id="mPass" placeholder="contraseña" autocomplete="off">
-        <button onclick="genPass()">🔀 Generar</button>
-      </div>
-    </div>
-    <div class="fg"><label>Nombre del cliente (opcional)</label><input type="text" id="mName" placeholder="ej. Juan García"></div>
-    <div class="fg">
-      <label>Tipo de lista</label>
-      <div class="tsw">
-        <button class="tb sel" id="btnM3U" onclick="selectType('m3u')">📋 M3U</button>
-        <button class="tb" id="btnXt" onclick="selectType('xtream')">⚡ Xtream</button>
-      </div>
-      <select id="mListType" style="display:none" onchange="toggleFields()"><option value="m3u">M3U</option><option value="xtream">Xtream</option></select>
-    </div>
-    <div id="fM3U">
-      <div class="fg">
-        <label>URL M3U del proveedor</label>
-        <input type="url" id="mUrl" placeholder="http://proveedor/lista.m3u" onblur="detectExpiry()">
-        <p class="hint">La fecha de vencimiento se detecta automáticamente si es una URL Xtream</p>
-        <p class="xpinfo" id="xpInfo"></p>
-      </div>
-    </div>
-    <div id="fXt" style="display:none">
-      <div class="fg"><label>Servidor del proveedor</label><input type="url" id="mXSrv" placeholder="http://proveedor:8080" onblur="detectXtExpiry()"></div>
-      <div class="fg"><label>Usuario del proveedor</label><input type="text" id="mXUser" onblur="detectXtExpiry()"></div>
-      <div class="fg"><label>Contraseña del proveedor</label><input type="password" id="mXPass" onblur="detectXtExpiry()"></div>
-      <p class="xpinfo" id="xpInfo" style="margin-bottom:12px;"></p>
-    </div>
-    <div class="fg"><label>Fecha de vencimiento</label><input type="date" id="mExpiry"></div>
-    <div class="mbtns">
-      <button class="bcn" onclick="closeModal()">Cancelar</button>
-      <button class="bsv" onclick="saveUser()">💾 Guardar</button>
-    </div>
-  </div>
-</div>
-
-<!-- MODAL SERVIDOR -->
-<div class="mo" id="srvModal">
-  <div class="srvbox">
-    <div class="mh" style="margin-bottom:16px;"><h3 style="color:var(--gn);">📡 Datos de conexión para la app</h3><button class="mclose" onclick="closeSrvModal()">✕</button></div>
-    <div class="srvrow"><div class="srvlabel">Servidor (URL del portal)</div><div class="srvval">https://fenix.dpdns.org</div></div>
-    <div class="srvrow"><div class="srvlabel">Usuario</div><div class="srvval">el username que creaste en el panel</div></div>
-    <div class="srvrow"><div class="srvlabel">Contraseña</div><div class="srvval">la contraseña que creaste en el panel</div></div>
-    <div class="srvnote">
-      En la app (IPTV Smarters) elegí <strong>"Login with Xtream Codes API"</strong> e ingresá estos datos.<br><br>
-      Clic en <strong>📋</strong> en la tabla para copiar los datos de un usuario listo para pegarlos.
-    </div>
-    <button class="bsv" onclick="closeSrvModal()" style="width:100%;margin-top:12px;">Cerrar</button>
-  </div>
-</div>
-
-<div class="toast" id="toast"></div>
-</body>
-</html>
+      <div style="backgrou 
