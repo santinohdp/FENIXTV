@@ -319,6 +319,18 @@ app.get('/xmltv.php', async (req, res) => {
   res.send('<?xml version="1.0" encoding="UTF-8"?><tv></tv>');
 });
 
+// ══════════════════════════════════════════════════════════
+// BRIDGE — app Android "TV" (com.tv.tv), antes hablaba con
+// api.pluscapelian.com. Reusa getUser/fbGet/fetchExternal de arriba.
+// ══════════════════════════════════════════════════════════
+const createBridge = require('./bridge');
+app.use(createBridge({
+  fbGet,
+  getUser,
+  fetchExternal,
+  publicBaseUrl: process.env.PUBLIC_BASE_URL || 'https://fenixtv-1.onrender.com',
+}));
+
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log(`Panel IPTV corriendo en puerto ${PORT}`);
