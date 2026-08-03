@@ -10,13 +10,17 @@
 //               drm_license_url, drm_scheme, cdn_url, location_url,
 //               device_uuid, check, web, temporada: [] }
 //
-// Los "uri" apuntan a TUS PROPIAS rutas /live, /movie, /series de server.js
-// (las que ya tenés y hacen streamProxy/pipeStream), no directo al proveedor.
-// Así todo el tráfico de reproducción sigue pasando por tu servidor.
+// IMPORTANTE (confirmado leyendo el smali):
+//  - Los adapters de pantalla usan el campo "ico" para la miniatura, NO
+//    "iconpng" — así que "ico" tiene que tener la URL del logo.
+//  - PlayerActivity desencripta "uri" con AES antes de reproducir (mismo
+//    key/iv de la sesión), así que "uri" va CIFRADO, no en texto plano.
+
+const { encryptAES } = require("./crypto");
 
 function emptyChannelExtras() {
   return {
-    ico: "",
+    iconpng: "",
     iconoHorizontal: "",
     descripcion: "",
     info: "",
@@ -37,7 +41,6 @@ function emptyChannelExtras() {
 }
 
 function liveUrl(base, user, pass, streamId) {
-  // server.js le agrega ".m3u8" solo si streamId no tiene punto — lo dejamos así.
   return `${base}/live/${user}/${pass}/${streamId}`;
 }
 
@@ -49,14 +52,18 @@ function seriesUrl(base, user, pass, episodeId, ext) {
   return `${base}/series/${user}/${pass}/${episodeId}.${ext || "mp4"}`;
 }
 
-function buildLiveCategories(categories, streamsByCategory, base, user, pass) {
+function enc(url, key, iv) {
+  return encryptAES(url, key, iv);
+}
+
+function buildLiveCategories(categories, streamsByCategory, base, user, pass, key, iv) {
   return categories.map((cat) => ({
     name: cat.category_name || "Sin nombre",
     mode: false,
     lista: (streamsByCategory[cat.category_id] || []).map((s) => ({
       name: s.name || "Canal",
-      uri: liveUrl(base, user, pass, s.stream_id),
-      iconpng: s.stream_icon || "",
+      uri: enc(liveUrl(base, user, pass, s.stream_id), key, iv),
+      ico: s.stream_icon || "",
       tipo: "live",
       temporada: [],
       ...emptyChannelExtras(),
@@ -64,14 +71,14 @@ function buildLiveCategories(categories, streamsByCategory, base, user, pass) {
   }));
 }
 
-function buildVodCategories(categories, streamsByCategory, base, user, pass) {
+function buildVodCategories(categories, streamsByCategory, base, user, pass, key, iv) {
   return categories.map((cat) => ({
     name: cat.category_name || "Sin nombre",
     mode: false,
     lista: (streamsByCategory[cat.category_id] || []).map((s) => ({
       name: s.name || "Película",
-      uri: movieUrl(base, user, pass, s.stream_id, s.container_extension),
-      iconpng: s.stream_icon || "",
+      uri: enc(movieUrl(base, user, pass, s.stream_id, s.container_extension), key, iv),
+      ico: s.stream_icon || "",
       tipo: "movie",
       temporada: [],
       ...emptyChannelExtras(),
@@ -84,7 +91,7 @@ function buildVodCategories(categories, streamsByCategory, base, user, pass) {
  * action=get_series_info, para incluir episodios reales en "temporada".
  * Si no se pasa, "temporada" queda vacío (listado más rápido).
  */
-function buildSeriesCategories(categories, seriesByCategory, base, user, pass, seriesInfoById) {
+function buildSeriesCategories(categories, seriesByCategory, base, user, pass, key, iv, seriesInfoById) {
   return categories.map((cat) => ({
     name: cat.category_name || "Sin nombre",
     mode: false,
@@ -96,8 +103,8 @@ function buildSeriesCategories(categories, seriesByCategory, base, user, pass, s
           for (const ep of info.episodes[seasonNum]) {
             episodes.push({
               name: `T${seasonNum} - ${ep.title || "Episodio " + ep.episode_num}`,
-              uri: seriesUrl(base, user, pass, ep.id, ep.container_extension),
-              iconpng: (ep.info && ep.info.movie_image) || s.cover || "",
+              uri: enc(seriesUrl(base, user, pass, ep.id, ep.container_extension), key, iv),
+              ico: (ep.info && ep.info.movie_image) || s.cover || "",
               tipo: "episode",
               temporada: [],
               ...emptyChannelExtras(),
@@ -108,7 +115,7 @@ function buildSeriesCategories(categories, seriesByCategory, base, user, pass, s
       return {
         name: s.name || "Serie",
         uri: "",
-        iconpng: s.cover || "",
+        ico: s.cover || "",
         tipo: "series",
         temporada: episodes,
         ...emptyChannelExtras(),
