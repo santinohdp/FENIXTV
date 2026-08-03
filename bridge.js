@@ -13,7 +13,7 @@
 //   app.use(createBridge({ fbGet, getUser, fetchExternal, publicBaseUrl: 'https://fenixtv-1.onrender.com' }));
 
 const express = require("express");
-const { generateKeyIv, encryptAES, keyIvToBase64 } = require("./crypto");
+const { deriveKeyIv, encryptAES, keyIvToBase64 } = require("./crypto");
 const {
   buildLiveCategories,
   buildVodCategories,
@@ -64,24 +64,32 @@ module.exports = function createBridge({ fbGet, getUser, fetchExternal, publicBa
 
     try {
       const user = await fbGet(`iptv_users/${usuario}`);
+      console.log(`[bridge] login intento usuario="${usuario}" -> encontrado en Firebase:`, !!user);
 
-      if (!user || user.password !== password) {
+      if (!user) {
+        console.log(`[bridge] rechazado: no existe "iptv_users/${usuario}" en Firebase`);
+        return res.json({ response: { message: "credenciales_invalidas" } });
+      }
+      if (user.password !== password) {
+        console.log(`[bridge] rechazado: password no coincide (esperado="${user.password}", recibido="${password}")`);
         return res.json({ response: { message: "credenciales_invalidas" } });
       }
       if (user.listType !== "xtream" || !user.xtreamServer) {
-        // Esta app puntual solo puede armar canales/pelis/series desde una
-        // cuenta tipo Xtream (necesita categorías). Con M3U no hay forma.
-        console.warn(`[bridge] usuario "${usuario}" no es tipo Xtream, login rechazado para esta app.`);
+        console.log(`[bridge] rechazado: listType="${user.listType}" (necesita ser "xtream" con xtreamServer cargado)`);
         return res.json({ response: { message: "credenciales_invalidas" } });
       }
       if (!user.active) {
+        console.log(`[bridge] rechazado: usuario inactivo (active=${user.active})`);
         return res.json({ response: { message: "credenciales_invalidas" } });
       }
       if (user.expiry && user.expiry < Date.now()) {
+        console.log(`[bridge] rechazado: usuario vencido (expiry=${new Date(user.expiry).toISOString()})`);
         return res.json({ response: { message: "usuario_vencido" } });
       }
 
-      const { key, iv } = generateKeyIv();
+      console.log(`[bridge] login OK para "${usuario}"`);
+
+      const { key, iv } = deriveKeyIv(usuario, password);
       const { keyB64, ivB64 } = keyIvToBase64({ key, iv });
 
       const mk = (kind) =>
@@ -118,7 +126,8 @@ module.exports = function createBridge({ fbGet, getUser, fetchExternal, publicBa
         xtreamAction(u, p, "get_live_categories"),
         xtreamAction(u, p, "get_live_streams"),
       ]);
-      const result = buildLiveCategories(categories, groupByCategory(allStreams), publicBaseUrl, u, p);
+      const { key, iv } = deriveKeyIv(u, p);
+      const result = buildLiveCategories(categories, groupByCategory(allStreams), publicBaseUrl, u, p, key, iv);
       res.json(result);
     } catch (e) {
       console.error("[bridge] content/live error:", e.message);
@@ -134,7 +143,8 @@ module.exports = function createBridge({ fbGet, getUser, fetchExternal, publicBa
         xtreamAction(u, p, "get_vod_categories"),
         xtreamAction(u, p, "get_vod_streams"),
       ]);
-      const result = buildVodCategories(categories, groupByCategory(allStreams), publicBaseUrl, u, p);
+      const { key, iv } = deriveKeyIv(u, p);
+      const result = buildVodCategories(categories, groupByCategory(allStreams), publicBaseUrl, u, p, key, iv);
       res.json(result);
     } catch (e) {
       console.error("[bridge] content/movies error:", e.message);
@@ -152,7 +162,8 @@ module.exports = function createBridge({ fbGet, getUser, fetchExternal, publicBa
       ]);
       // Episodios no se cargan acá por defecto (más rápido). Ver README para
       // activar el fetch de get_series_info si la app los necesita de entrada.
-      const result = buildSeriesCategories(categories, groupByCategory(allSeries), publicBaseUrl, u, p);
+      const { key, iv } = deriveKeyIv(u, p);
+      const result = buildSeriesCategories(categories, groupByCategory(allSeries), publicBaseUrl, u, p, key, iv);
       res.json(result);
     } catch (e) {
       console.error("[bridge] content/series error:", e.message);
@@ -167,8 +178,28 @@ module.exports = function createBridge({ fbGet, getUser, fetchExternal, publicBa
   // ------------------------------------------------------------------
   // Endpoints secundarios (stubs "todo OK" — no rompen pantallas de ajustes)
   // ------------------------------------------------------------------
-  router.post("/apis-protect/verificar_device.php", (req, res) => res.json({ response: { message: "device_ok" } }));
-  router.post("/apis-protect/fecha_2.php", (req, res) => res.json({ response: { message: "fecha_ok" } }));
+  // "verificar_device.php" espera el BODY como texto plano, no JSON:
+  // "dispositivo_activo" | "dispositivo_desactivado" | cualquier otra cosa (error).
+  router.post("/apis-protect/verificar_device.php", (req, res) => {
+    res.type("text/plain").send("dispositivo_activo");
+  });
+
+  // "fecha_2.php" espera un ARRAY JSON con un objeto adentro:
+  // [{ status, restan, plan, expira, list, movies, series }]
+  // status !== "expirado" para que la cuenta se considere vigente.
+  router.post("/apis-protect/fecha_2.php", (req, res) => {
+    res.json([
+      {
+        status: "activo",
+        restan: "",
+        plan: "",
+        expira: "",
+        list: "",
+        movies: "",
+        series: "",
+      },
+    ]);
+  });
   router.post("/apis-protect/eliminar_dispositivo.php", (req, res) => res.json({ response: { message: "ok" } }));
   router.post("/apis-protect/eliminar_device.php", (req, res) => res.json({ response: { message: "ok" } }));
   router.post("/apis-protect/sesiones_activas_api.php", (req, res) => res.json({ response: { sesiones: [] } }));
