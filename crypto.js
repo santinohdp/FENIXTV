@@ -13,6 +13,25 @@ function generateKeyIv() {
   return { key, iv };
 }
 
+/**
+ * Deriva una clave/IV SIEMPRE IGUAL a partir de usuario+clave (determinístico).
+ * Hace falta porque el login genera un key/iv y se lo pasa a la app, pero
+ * las categorías/canales se piden DESPUÉS en un request aparte — con esto
+ * evitamos tener que guardar sesión en memoria: cualquier request puede
+ * volver a derivar exactamente el mismo key/iv con solo saber usuario+clave.
+ */
+function deriveKeyIv(username, password) {
+  const key = crypto
+    .createHash("sha256")
+    .update(`fenixtv-bridge-key:${username}:${password}`)
+    .digest(); // 32 bytes -> AES-256
+  const iv = crypto
+    .createHash("md5")
+    .update(`fenixtv-bridge-iv:${username}:${password}`)
+    .digest(); // 16 bytes
+  return { key, iv };
+}
+
 function encryptAES(plainText, key, iv) {
   const cipher = crypto.createCipheriv("aes-256-cbc", key, iv);
   const encrypted = Buffer.concat([
@@ -26,4 +45,4 @@ function keyIvToBase64({ key, iv }) {
   return { keyB64: key.toString("base64"), ivB64: iv.toString("base64") };
 }
 
-module.exports = { generateKeyIv, encryptAES, keyIvToBase64 };
+module.exports = { generateKeyIv, deriveKeyIv, encryptAES, keyIvToBase64 };
