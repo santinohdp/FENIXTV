@@ -202,8 +202,14 @@ module.exports = function createBridge({ fbGet, getUser, fetchExternal, publicBa
   });
   router.post("/apis-protect/eliminar_dispositivo.php", (req, res) => res.json({ response: { message: "ok" } }));
   router.post("/apis-protect/eliminar_device.php", (req, res) => res.json({ response: { message: "ok" } }));
-  router.post("/apis-protect/sesiones_activas_api.php", (req, res) => res.json({ response: { sesiones: [] } }));
-  router.get("/apis-protect/update.php", (req, res) => res.json({ response: { update_available: false } }));
+  // Espera un ARRAY JSON de sesiones (objetos con id_dispositivo/device_name/etc.).
+  // Vacío es un caso válido ("No se encontraron sesiones activas").
+  router.post("/apis-protect/sesiones_activas_api.php", (req, res) => res.json([]));
+  // "update.php" espera un ARRAY JSON: [{ "response": "...", "url": "..." }]
+  // Si "response" es "desactualizado" la app muestra un diálogo de update.
+  const updateResponse = () => [{ response: "actualizado", url: "" }];
+  router.post("/apis-protect/update.php", (req, res) => res.json(updateResponse()));
+  router.get("/apis-protect/update.php", (req, res) => res.json(updateResponse()));
   router.post("/apis-protect/security_log.php", (req, res) => res.status(200).send("ok"));
 
   return router;
