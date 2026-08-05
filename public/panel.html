@@ -22,7 +22,10 @@ const fbApp = initializeApp(firebaseConfig);
 const auth  = getAuth(fbApp);
 const db    = getDatabase(fbApp);
 
-const BASE = 'https://fenix.dpdns.org';
+// FIX: antes apuntaba fijo a "https://fenix.dpdns.org" (dominio viejo, sin
+// CORS habilitado para este panel). Ahora usa siempre el mismo dominio donde
+// está corriendo el panel — así nunca hay problema de CORS.
+const BASE = window.location.origin;
 
 function $i(id){ return document.getElementById(id); }
 function toast(msg, err=false){
@@ -479,7 +482,7 @@ tr:last-child td{border-bottom:none;}
 <div class="mo" id="srvModal">
   <div class="srvbox">
     <div class="mh" style="margin-bottom:16px;"><h3 style="color:var(--gn);">📡 Datos de conexión para la app</h3><button class="mclose" onclick="closeSrvModal()">✕</button></div>
-    <div class="srvrow"><div class="srvlabel">Servidor (URL del portal)</div><div class="srvval">https://fenix.dpdns.org</div></div>
+    <div class="srvrow"><div class="srvlabel">Servidor (URL del portal)</div><div class="srvval" id="srvUrl">—</div></div>
     <div class="srvrow"><div class="srvlabel">Usuario</div><div class="srvval">el username que creaste en el panel</div></div>
     <div class="srvrow"><div class="srvlabel">Contraseña</div><div class="srvval">la contraseña que creaste en el panel</div></div>
     <div class="srvnote">
@@ -491,5 +494,8 @@ tr:last-child td{border-bottom:none;}
 </div>
 
 <div class="toast" id="toast"></div>
+<script>
+  document.getElementById('srvUrl').textContent = window.location.origin;
+</script>
 </body>
 </html>
